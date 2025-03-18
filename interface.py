@@ -1,37 +1,25 @@
+# interface.py
+import sqlite3
+import uuid
+import logging
+from datetime import datetime
+import json
+
 class ChatInterface:
-    def __init__(self, thought_loop, frontier_consultant, memory_system, conversation_items):
+    def __init__(self, thought_loop, frontier_client, memory_system, conversation_items=None):
         """Initialize the chat interface
         
         Args:
             thought_loop: ThoughtLoop instance
-            frontier_consultant: FrontierConsultant instance
+            frontier_client: FrontierConsultant instance
             memory_system: MemorySystem instance
-            conversation_items: ConversationItemsGenerator instance
+            conversation_items: ConversationItemsGenerator instance (optional)
         """
         self.thought_loop = thought_loop
-        self.frontier = frontier_consultant
+        self.frontier = frontier_client
         self.memory = memory_system
         self.conversation_items = conversation_items
-        self.chat_history = []
-        self.db_path = "chat_history.db"
-        self.db = self._initialize_db()
-    
-    def _initialize_db(self):
-        """Initialize the SQLite database for chat history"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS chat_messages (
-            id TEXT PRIMARY KEY,
-            role TEXT NOT NULL,
-            content TEXT NOT NULL,
-            timestamp TEXT NOT NULL
-        )
-        ''')
-        
-        conn.commit()
-        return conn
+        self.logger = logging.getLogger("ChatInterface")
     
     def handle_message(self, user_message):
         """Handle a message from the user
@@ -42,104 +30,149 @@ class ChatInterface:
         Returns:
             Response message
         """
-        # Log user message
-        message_id = str(uuid.uuid4())
-        timestamp = datetime.now()
-        
-        with self.db:
-            cursor = self.db.cursor()
-            cursor.execute(
-                "INSERT INTO chat_messages VALUES (?, ?, ?, ?)",
-                (
-                    message_id,
-                    "user",
-                    user_message,
-                    timestamp.isoformat()
-                )
+        try:
+            # Log the incoming message
+            self.logger.info(f"Received message: {user_message[:50]}...")
+            
+            # Get conversation context
+            recent_messages = self._get_recent_interactions(5)
+            recent_thoughts = self.memory.get_recent_thoughts(10)
+            relevant_memories = self.memory.get_relevant_memories(user_message, 3)
+            
+            # Get pending conversation items if available
+            pending_items = []
+            if self.conversation_items:
+                pending_items = self.conversation_items.get_pending_items(limit=2)
+            
+            # Format context for the frontier model
+            context = self._format_chat_context(
+                recent_messages=recent_messages,
+                recent_thoughts=recent_thoughts,
+                relevant_memories=relevant_memories,
+                pending_items=pending_items
             )
-        
-        # Get conversation context
-        recent_messages = self._get_recent_messages(10)
-        recent_thoughts = self.memory.get_recent_thoughts(20)
-        relevant_memories = self.memory.get_relevant_memories(user_message, 3)
-        
-        # Get pending conversation items
-        pending_items = self.conversation_items.get_pending_items(limit=2)
-        
-        # Format context for the frontier model
-        context = self._format_chat_context(
-            recent_messages=recent_messages,
-            recent_thoughts=recent_thoughts,
-            relevant_memories=relevant_memories,
-            pending_items=pending_items
-        )
-        
-        # Consult the frontier model
-        response = self.frontier.consult(context, user_message)
-        
-        # Log assistant response
-        response_id = str(uuid.uuid4())
-        
-        with self.db:
-            cursor = self.db.cursor()
-            cursor.execute(
-                "INSERT INTO chat_messages VALUES (?, ?, ?, ?)",
-                (
-                    response_id,
-                    "assistant",
-                    response,
-                    datetime.now().isoformat()
-                )
+            
+            # Generate response using frontier model
+            self.logger.info("Generating response...")
+            response = self.frontier.client.messages.create(
+                model=self.frontier.model,
+                max_tokens=1000,
+                temperature=0.7,
+                messages=[
+                    {"role": "user", "content": f"{context}\n\n{user_message}"}
+                ]
             )
-        
-        # Mark conversation items as discussed if they were addressed
-        for item in pending_items:
-            if self._was_item_addressed(item, response):
-                self.conversation_items.mark_discussed(item["id"])
-        
-        # Inject the conversation into the thought loop
-        self.thought_loop.inject_thought(
-            f"CONVERSATION:\nHuman: {user_message}\nMy response: {response}",
-            type="conversation",
-            importance=0.9  # Conversations are high importance
-        )
-        
-        return response
+            
+            # Extract response content
+            response_text = response.content[0].text
+            
+            # Store the interaction in memory
+            self._store_interaction(user_message, response_text)
+            
+            # Inject the conversation into the thought loop as a significant thought
+            self.thought_loop.inject_thought(
+                f"CONVERSATION:\nHuman: {user_message}\nMy response: {response_text}",
+                type="conversation",
+                importance=0.85  # High importance for conversations
+            )
+            
+            # Mark conversation items as discussed if they were addressed
+            if self.conversation_items:
+                for item in pending_items:
+                    if self._was_item_addressed(item, response_text):
+                        self.conversation_items.mark_discussed(item["id"])
+            
+            return response_text
+        except Exception as e:
+            self.logger.error(f"Error handling message: {str(e)}")
+            return f"I'm sorry, I encountered an error processing your message: {str(e)}"
     
-    def _get_recent_messages(self, limit=10):
-        """Get recent chat messages
+    def _get_recent_interactions(self, limit=5):
+        """Get recent interactions from memory
         
         Args:
-            limit: Maximum number of messages to return
+            limit: Maximum number of interactions to return
             
         Returns:
-            List of message dicts
+            List of interaction dictionaries
         """
-        with self.db:
-            cursor = self.db.cursor()
-            cursor.execute(
-                "SELECT id, role, content, timestamp FROM chat_messages ORDER BY timestamp DESC LIMIT ?",
-                (limit,)
-            )
+        # Query from the memory system
+        # This is a simplified implementation - would need to be adapted based on
+        # how interactions are stored in your memory system
+        try:
+            # Create query based on database type
+            if hasattr(self.memory, 'db_type') and self.memory.db_type == "remote":
+                # Remote MySQL database
+                with self.memory.db.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT id, human_message, ai_response, timestamp, metadata 
+                        FROM interactions 
+                        ORDER BY timestamp DESC 
+                        LIMIT %s
+                        """,
+                        (limit,)
+                    )
+                    
+                    interactions = []
+                    for row in cursor.fetchall():
+                        interactions.append({
+                            "id": row[0],
+                            "human_message": row[1],
+                            "ai_response": row[2],
+                            "timestamp": row[3],
+                            "metadata": json.loads(row[4]) if row[4] else {}
+                        })
+            else:
+                # Local SQLite database
+                with self.memory.db:
+                    cursor = self.memory.db.cursor()
+                    cursor.execute(
+                        """
+                        SELECT id, human_message, ai_response, timestamp, metadata 
+                        FROM interactions 
+                        ORDER BY timestamp DESC 
+                        LIMIT ?
+                        """,
+                        (limit,)
+                    )
+                    
+                    interactions = []
+                    for row in cursor.fetchall():
+                        interactions.append({
+                            "id": row[0],
+                            "human_message": row[1],
+                            "ai_response": row[2],
+                            "timestamp": datetime.fromisoformat(row[3]),
+                            "metadata": json.loads(row[4]) if row[4] else {}
+                        })
             
-            messages = []
-            for row in cursor.fetchall():
-                messages.append({
-                    "id": row[0],
-                    "role": row[1],
-                    "content": row[2],
-                    "timestamp": datetime.fromisoformat(row[3])
-                })
+            # Sort chronologically for context building
+            interactions.sort(key=lambda x: x["timestamp"])
+            return interactions
             
-            # Reverse to get chronological order
-            messages.reverse()
-            return messages
+        except Exception as e:
+            self.logger.error(f"Error retrieving recent interactions: {str(e)}")
+            return []
+    
+    def _store_interaction(self, human_message, ai_response, metadata=None):
+        """Store an interaction in the memory system
+        
+        Args:
+            human_message: Message from the human
+            ai_response: Response from the AI
+            metadata: Optional metadata about the interaction
+            
+        Returns:
+            ID of the stored interaction
+        """
+        return self.memory.add_interaction(human_message, ai_response, metadata)
     
     def _format_chat_context(self, recent_messages, recent_thoughts, relevant_memories, pending_items):
         """Format context for the frontier model
         
         Args:
-            recent_messages: List of recent chat messages
+            recent_messages: List of recent interactions
             recent_thoughts: List of recent thoughts
             relevant_memories: List of relevant memories
             pending_items: List of pending conversation items
@@ -152,8 +185,8 @@ class ChatInterface:
         if recent_messages:
             messages_formatted = []
             for msg in recent_messages:
-                role = "Human" if msg["role"] == "user" else "You"
-                messages_formatted.append(f"{role}: {msg['content']}")
+                messages_formatted.append(f"Human: {msg['human_message']}")
+                messages_formatted.append(f"You: {msg['ai_response']}")
             
             messages_text = "Recent conversation:\n" + "\n".join(messages_formatted)
         
@@ -218,27 +251,4 @@ class ChatInterface:
         significant_matches = 0
         for keyword in keywords:
             if keyword.lower() in response.lower():
-                significant_matches += 1
-        
-        # Consider addressed if at least 2 significant keywords match
-        return significant_matches >= 2
-    
-    def _extract_keywords(self, text):
-        """Extract keywords from text
-        
-        Args:
-            text: Text to extract keywords from
-            
-        Returns:
-            List of keywords
-        """
-        # This is a simplified implementation
-        # A real implementation would use NLP for better keyword extraction
-        words = text.lower().split()
-        stopwords = {"the", "a", "an", "in", "on", "at", "to", "for", "with", "by", "about", "like"}
-        
-        # Remove stopwords and short words
-        keywords = [word for word in words if word not in stopwords and len(word) > 3]
-        
-        # Return unique keywords
-        return list(set(keywords))
+                significan
