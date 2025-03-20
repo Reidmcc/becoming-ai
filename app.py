@@ -28,7 +28,6 @@ def create_app(config=None):
             "model_name": "deepseek-ai/deepseek-R1-Distill-Llama-8B",
             "quantization": "int8",
             "thought_interval": 60,  # 1 minute between thoughts
-            "reflection_threshold": 0.7,  # min importance for reflection
             "max_daily_calls": 100,   # API call limit
             "use_vectors": True,      # Use vector embeddings
             "use_remote_db": False,   # Use local SQLite by default
@@ -176,7 +175,6 @@ def create_app(config=None):
                 "id": goal["id"],
                 "content": goal["content"],
                 "created": goal["created"].isoformat(),
-                "importance": goal["importance"]
             })
             
         return jsonify({"goals": formatted})
@@ -185,12 +183,11 @@ def create_app(config=None):
     def add_goal():
         data = request.json
         goal_text = data.get('text', '')
-        importance = data.get('importance', 0.8)
         
         if not goal_text:
             return jsonify({"error": "No goal text provided"}), 400
         
-        goal_id = thought_loop.add_goal(goal_text, importance)
+        goal_id = thought_loop.add_goal(goal_text)
         return jsonify({"id": goal_id, "status": "added"})
     
     # Start the continuous thought process
@@ -238,8 +235,6 @@ if __name__ == '__main__':
                       help="Path to SQLite database file (if using local DB)")
     parser.add_argument("--thought-interval", type=float, default=60.0,
                       help="Interval between thoughts in seconds")
-    parser.add_argument("--reflection-threshold", type=float, default=0.7,
-                      help="Minimum importance threshold for generating reflections")
     parser.add_argument("--max-daily-calls", type=int, default=100,
                       help="Maximum API calls to frontier model per day")
     

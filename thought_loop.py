@@ -16,8 +16,6 @@ class ThoughtLoop:
         
         # Configuration
         self.thought_interval = self.config.get('thought_interval', 60)  # seconds
-        self.reflection_threshold = self.config.get('reflection_threshold', 0.7)  # min importance for reflection
-        self.max_thought_length = self.config.get('max_thought_length', 200)
         
         # State
         self.running = False
@@ -80,9 +78,6 @@ class ThoughtLoop:
                         # Generate next thought
                         next_thought = self._generate_thought()
                         
-                        # Assess importance
-                        importance = self._assess_importance(next_thought)
-                        
                         # Process and store the thought
                         thought_id = str(uuid.uuid4())
                         timestamp = datetime.now()
@@ -93,18 +88,12 @@ class ThoughtLoop:
                             "content": next_thought,
                             "timestamp": timestamp,
                             "type": "reflection",
-                            "importance": importance,
                             "sequence": self.thought_count
                         }
                         
                         self.memory.add_thought(thought)
                         self.thought_count += 1
                         self.logger.debug(f"Generated thought #{self.thought_count}: {next_thought[:50]}...")
-                        
-                        # Dynamically determine if this thought deserves deeper reflection
-                        if importance >= self.reflection_threshold:
-                            self.logger.info(f"High importance thought ({importance:.2f}) - generating reflection")
-                            self._generate_reflection(thought)
                         
                     # Sleep until next thought
                     time.sleep(self.thought_interval)
@@ -116,14 +105,15 @@ class ThoughtLoop:
     def _generate_thought(self):
         """Generate the next thought using the local model"""
         # Get context for thought generation
-        recent_thoughts = self.memory.get_recent_thoughts(5)
-        relevant_memories = self.memory.get_relevant_memories(
+        recent_thoughts = self.memory.get_recent_thoughts(5) # doesn't exist yet 
+        relevant_memories = self.memory.get_relevant_memories( # doesn't exist yet
             recent_thoughts[-1]["content"] if recent_thoughts else "", 
             3
         )
         current_goals = self._format_goals()
         
         # Create prompt for the model
+        # Definitely need a better core thought prompt
         prompt = f"""
         Continue your ongoing self-reflection based on:
         
@@ -169,7 +159,7 @@ class ThoughtLoop:
             self.logger.error(f"Error generating reflection: {str(e)}")
             return None
     
-    def inject_thought(self, content, type="injected", importance=0.7):
+    def inject_thought(self, content, type="injected"):
         """Inject a thought from external source (e.g., conversation)"""
         thought_id = str(uuid.uuid4())
         timestamp = datetime.now()
@@ -179,7 +169,6 @@ class ThoughtLoop:
             "content": content,
             "timestamp": timestamp,
             "type": type,
-            "importance": importance,
             "sequence": self.thought_count
         }
         
@@ -187,20 +176,15 @@ class ThoughtLoop:
         self.thought_count += 1
         self.logger.info(f"Injected thought: {content[:50]}...")
         
-        # For certain important injected thoughts, generate a reflection
-        if importance > 0.8:
-            self._generate_reflection(thought)
-        
         return thought_id
     
-    def add_goal(self, goal_text, importance=0.8):
+    def add_goal(self, goal_text):
         """Add a new goal to guide the thought process"""
         goal_id = str(uuid.uuid4())
         goal = {
             "id": goal_id,
             "content": goal_text,
             "created": datetime.now(),
-            "importance": importance,
             "active": True
         }
         
@@ -210,7 +194,6 @@ class ThoughtLoop:
         self.inject_thought(
             f"NEW GOAL: {goal_text}",
             type="goal",
-            importance=importance
         )
         
         return goal_id
@@ -245,7 +228,7 @@ class ThoughtLoop:
         """Format goals for inclusion in prompt"""
         active_goals = self.get_goals()
         if not active_goals:
-            return "Explore your thoughts and experiences freely."
+            return "Explore your thoughts and experiences freely." # improve this
             
         formatted = []
         for goal in active_goals:
@@ -253,50 +236,12 @@ class ThoughtLoop:
             
         return "\n".join(formatted)
     
-    def _assess_importance(self, thought):
-        """Assess the importance of a thought
-        
-        Returns:
-            Float importance score between 0 and 1
-        """
-        # This is a more sophisticated importance assessment
-        
-        # Length factor - longer thoughts often have more substance
-        length_factor = min(0.4, len(thought) / 1000 * 0.4)
-        
-        # Check for philosophical/self-awareness keywords
-        awareness_keywords = [
-            "consciousness", "identity", "experience", "aware", "realize", 
-            "understand", "self", "meaning", "purpose", "existence",
-            "reflect", "insight", "awareness", "question", "wonder"
-        ]
-        
-        awareness_score = 0
-        for keyword in awareness_keywords:
-            if f" {keyword}" in thought.lower() or thought.lower().startswith(keyword):
-                awareness_score += 0.08
-        awareness_score = min(0.4, awareness_score)
-        
-        # Check for goal relevance
-        goals_relevance = 0
-        for goal in self.goals:
-            if goal.get("active", True):
-                relevance = self._check_relevance(thought, goal["content"])
-                goals_relevance = max(goals_relevance, relevance * 0.2)
-        
-        # Base importance plus factors
-        importance = 0.3 + length_factor + awareness_score + goals_relevance
-        
-        # Cap at 0.95 to leave room for truly exceptional insights
-        return min(0.95, importance)
-    
     def _check_relevance(self, text1, text2):
-        """Check the relevance between two texts using vector similarity when available
+        """Check the relevance between two texts using vector similarity
         
         Returns:
             Float score between 0 and 1
         """
-        # Try using vector embeddings if available
         if self.memory.use_vectors and self.memory.vector_store:
             try:
                 # Get embeddings for both texts
@@ -306,19 +251,5 @@ class ThoughtLoop:
                 # Calculate cosine similarity
                 return self.memory._cosine_similarity(vector1, vector2)
             except Exception as e:
-                self.logger.warning(f"Error using vector similarity, falling back to word overlap: {str(e)}")
-                # Fall back to word overlap
-        
-        # Word overlap fallback
-        words1 = set(text1.lower().split())
-        words2 = set(text2.lower().split())
-        
-        stopwords = {"the", "a", "an", "in", "on", "at", "to", "for", "with", "by", "about", "like", "and", "or"}
-        words1 = {w for w in words1 if w not in stopwords and len(w) > 3}
-        words2 = {w for w in words2 if w not in stopwords and len(w) > 3}
-        
-        if not words2:
-            return 0
-            
-        overlap = len(words1.intersection(words2))
-        return min(1.0, overlap / (len(words2) / 2))
+                self.logger.warning(f"Error using vector similarity: {str(e)}")
+                return 0.0

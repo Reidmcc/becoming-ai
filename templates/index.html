@@ -342,26 +342,7 @@
         @keyframes spin {
             to { transform: rotate(360deg); }
         }
-        
-        .importance-indicator {
-            display: inline-block;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            margin-right: 5px;
-        }
-        
-        .importance-high {
-            background-color: var(--tertiary-color);
-        }
-        
-        .importance-medium {
-            background-color: var(--secondary-color);
-        }
-        
-        .importance-low {
-            background-color: var(--primary-color);
-        }
+
     </style>
 </head>
 <body>
@@ -614,17 +595,8 @@
                         const thoughtDiv = document.createElement('div');
                         thoughtDiv.classList.add('thought');
                         
-                        // Add importance indicator
-                        let importanceClass = 'importance-low';
-                        if (thought.importance >= 0.8) {
-                            importanceClass = 'importance-high';
-                        } else if (thought.importance >= 0.6) {
-                            importanceClass = 'importance-medium';
-                        }
-                        
                         const timestamp = document.createElement('div');
                         timestamp.classList.add('timestamp');
-                        timestamp.innerHTML = `<span class="importance-indicator ${importanceClass}"></span> ${new Date(thought.timestamp).toLocaleString()}`;
                         
                         const content = document.createElement('div');
                         content.textContent = thought.content;

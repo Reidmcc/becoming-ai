@@ -1,5 +1,5 @@
-# main.py
-# ... [previous code] ...
+from memory_system import MemorySystem
+import argparse
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Run the Continuous AI system")
@@ -11,10 +11,8 @@ def parse_args():
                         help="Quantization level for model")
     
     # Thought process options
-    parser.add_argument("--thought-interval", type=float, default=60.0,
+    parser.add_argument("--thought-interval", type=float, default=60.0, # use int here instead of float? 
                         help="Interval between thoughts in seconds")
-    parser.add_argument("--reflection-interval", type=int, default=5,
-                        help="Generate reflection every N thoughts")
     parser.add_argument("--max-daily-calls", type=int, default=100,
                         help="Maximum API calls to frontier model per day")
     
@@ -34,15 +32,13 @@ def parse_args():
     parser.add_argument("--db-path", default="data/memories.db",
                         help="Path to SQLite database file (if using local DB)")
     
-    # Vector options
+    # Vector options (can remove this is the fallback word overlap option is removed)
     parser.add_argument("--use-vectors", action="store_true", default=True,
                         help="Use vector embeddings for memory retrieval")
                         
     return parser.parse_args()
 
 def main(args):
-    # ... [previous code] ...
-    
     # Create configuration
     config = {
         # Model config
@@ -68,5 +64,9 @@ def main(args):
     # ... [initialize components with updated config] ...
     
     memory_system = MemorySystem(config=config)
+
+    # intialize LocalModelLoader
+
+    # intialize ThoughtLoop
     
     # ... [rest of the main function] ...

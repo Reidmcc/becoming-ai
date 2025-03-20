@@ -16,6 +16,7 @@ class MemorySystem:
         """
         self.config = config or {}
         self.short_term_limit = self.config.get('short_term_limit', 100)
+        # load most recent thoughts from the datbase up to short_term_limit
         self.recent_thoughts_cache = []
         self.logger = logging.getLogger("MemorySystem")
         
@@ -26,18 +27,16 @@ class MemorySystem:
         if self.use_remote_db:
             self.db_host = self.config.get('db_host', 'localhost')
             self.db_port = self.config.get('db_port', 3306)
-            self.db_name = self.config.get('db_name', 'continuous_ai')
-            self.db_user = self.config.get('db_user', 'continuous_ai')
+            self.db_name = self.config.get('db_name', 'becoming_ai')
+            self.db_user = self.config.get('db_user', 'becoming_ai')
             self.db_password = self.config.get('db_password', '')
         else:
             self.db_path = self.config.get('db_path', 'data/memories.db')
             # Ensure database directory exists
             os.makedirs(os.path.dirname(os.path.abspath(self.db_path)), exist_ok=True)
         
-        # Initialize vector embeddings (if enabled)
-        self.use_vectors = self.config.get('use_vectors', True)
-        if self.use_vectors:
-            self.vector_store = self._initialize_vector_store()
+        # Initialize vector embeddings
+        self.vector_store = self._initialize_vector_store()
             
         # Initialize database
         self.db = self._initialize_db()
@@ -66,7 +65,6 @@ class MemorySystem:
             content TEXT NOT NULL,
             timestamp TEXT NOT NULL,
             type TEXT NOT NULL,
-            importance REAL DEFAULT 0.5,
             sequence INTEGER NOT NULL
         )
         ''')
@@ -77,7 +75,6 @@ class MemorySystem:
             content TEXT NOT NULL,
             title TEXT,
             timestamp TEXT NOT NULL,
-            importance REAL DEFAULT 0.5,
             source_thoughts TEXT,  -- JSON array of thought IDs
             metadata TEXT  -- JSON object for additional metadata
         )
@@ -133,7 +130,6 @@ class MemorySystem:
                 content TEXT NOT NULL,
                 timestamp DATETIME NOT NULL,
                 type VARCHAR(50) NOT NULL,
-                importance FLOAT DEFAULT 0.5,
                 sequence INT NOT NULL
             )
             ''')
@@ -144,7 +140,6 @@ class MemorySystem:
                 content TEXT NOT NULL,
                 title VARCHAR(255),
                 timestamp DATETIME NOT NULL,
-                importance FLOAT DEFAULT 0.5,
                 source_thoughts TEXT,
                 metadata TEXT
             )
@@ -207,6 +202,7 @@ class MemorySystem:
         except ImportError:
             self.logger.warning("sentence-transformers not installed. Please install it with:")
             self.logger.warning("pip install sentence-transformers")
+            # remove if fallback is removed
             self.logger.warning("Falling back to keyword search for memory retrieval")
             return None
     
@@ -228,7 +224,6 @@ class MemorySystem:
                             thought["content"],
                             thought["timestamp"].isoformat(),
                             thought["type"],
-                            thought.get("importance", 0.5),
                             thought["sequence"]
                         )
                     )
@@ -241,7 +236,6 @@ class MemorySystem:
                             thought["content"],
                             thought["timestamp"],  # MySQL takes datetime objects directly
                             thought["type"],
-                            thought.get("importance", 0.5),
                             thought["sequence"]
                         )
                     )
@@ -252,14 +246,11 @@ class MemorySystem:
             if len(self.recent_thoughts_cache) > self.short_term_limit:
                 self.recent_thoughts_cache.pop(0)
             
-            # Add to vector store if enabled
-            if self.use_vectors and self.vector_store:
-                vector = self.vector_store["model"].encode(thought["content"])
-                self.vector_store["vectors"][thought["id"]] = vector
+            vector = self.vector_store["model"].encode(thought["content"])
+            self.vector_store["vectors"][thought["id"]] = vector
             
             return thought["id"]
         except Exception as e:
             self.logger.error(f"Error adding thought: {str(e)}")
             return None
     
-    # ... [other methods remain the same, just update database access patterns] ...

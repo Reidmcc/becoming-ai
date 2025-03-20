@@ -73,7 +73,6 @@ class ChatInterface:
             self.thought_loop.inject_thought(
                 f"CONVERSATION:\nHuman: {user_message}\nMy response: {response_text}",
                 type="conversation",
-                importance=0.85  # High importance for conversations
             )
             
             # Mark conversation items as discussed if they were addressed
