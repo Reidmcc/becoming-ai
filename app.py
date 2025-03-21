@@ -1,9 +1,7 @@
 # app.py
-from flask import Flask, render_template, jsonify, request, redirect, url_for
 import os
 import logging
-import threading
-import time
+from flask import Flask, render_template, jsonify, request, redirect, url_for
 
 # Configure logging
 logging.basicConfig(
@@ -17,22 +15,13 @@ logging.basicConfig(
 
 logger = logging.getLogger("ContinuousAI")
 
+# Import configuration utilities
+from config_utils import setup_argparse, load_config, get_flattened_config
+
 def create_app(config=None):
     """Create and configure the Flask application"""
     app = Flask(__name__)
     app.secret_key = os.urandom(24)
-    
-    # Default configuration
-    if config is None:
-        config = {
-            "model_name": "deepseek-ai/deepseek-R1-Distill-Llama-8B",
-            "quantization": "int8",
-            "thought_interval": 60,  # 1 minute between thoughts
-            "max_daily_calls": 100,   # API call limit
-            "use_vectors": True,      # Use vector embeddings
-            "use_remote_db": False,   # Use local SQLite by default
-            "db_path": "data/memories.db"
-        }
     
     # Initialize components
     from model_loader import LocalModelLoader
@@ -60,6 +49,7 @@ def create_app(config=None):
         
         frontier_client = FrontierClient(
             api_key=os.environ.get("ANTHROPIC_API_KEY"),
+            model=config.get("frontier_model", "claude-3-7-sonnet-20250219"),
             max_daily_calls=config.get("max_daily_calls", 100)
         )
         logger.info("Frontier client initialized")
@@ -113,7 +103,7 @@ def create_app(config=None):
                 "id": thought["id"],
                 "content": thought["content"],
                 "timestamp": thought["timestamp"].isoformat(),
-                "type": thought["type"]
+                "type": thought["type"],
             })
         
         return jsonify({"thoughts": formatted})
@@ -200,79 +190,28 @@ def create_app(config=None):
     return app
 
 if __name__ == '__main__':
-    import argparse
-    
-    parser = argparse.ArgumentParser(description="Run the Continuous AI web interface")
-    
-    # Model options
-    parser.add_argument("--model", default="deepseek-ai/deepseek-R1-Distill-Llama-8B",
-                      help="Model to use for thought generation")
-    parser.add_argument("--quantization", choices=["int8", "int4", "fp16"], default="int8",
-                      help="Quantization level for model")
-    
-    # Thought process options
-    parser.add_argument("--thought-interval", type=float, default=60.0,
-                      help="Interval between thoughts in seconds")
-    parser.add_argument("--reflection-interval", type=int, default=5,
-                      help="Generate reflection every N thoughts")
-    parser.add_argument("--max-daily-calls", type=int, default=100,
-                      help="Maximum API calls to frontier model per day")
-    
-    # Memory options
-    parser.add_argument("--use-remote-db", action="store_true",
-                      help="Use remote database instead of local SQLite")
-    parser.add_argument("--db-host", default="localhost",
-                      help="Remote database host (if using remote DB)")
-    parser.add_argument("--db-port", type=int, default=3306,
-                      help="Remote database port (if using remote DB)")
-    parser.add_argument("--db-name", default="continuous_ai",
-                      help="Remote database name (if using remote DB)")
-    parser.add_argument("--db-user", default="continuous_ai",
-                      help="Remote database user (if using remote DB)")
-    parser.add_argument("--db-password", default="",
-                      help="Remote database password (if using remote DB)")
-    parser.add_argument("--db-path", default="data/memories.db",
-                      help="Path to SQLite database file (if using local DB)")
-    parser.add_argument("--thought-interval", type=float, default=60.0,
-                      help="Interval between thoughts in seconds")
-    parser.add_argument("--max-daily-calls", type=int, default=100,
-                      help="Maximum API calls to frontier model per day")
-    
-    # Vector options
-    parser.add_argument("--use-vectors", action="store_true", default=True,
-                      help="Use vector embeddings for memory retrieval")
-    
-    # Web server options
-    parser.add_argument("--host", default="0.0.0.0",
-                      help="Host to run the web server on")
-    parser.add_argument("--port", type=int, default=5000,
-                      help="Port to run the web server on")
-    parser.add_argument("--debug", action="store_true",
-                      help="Run in debug mode")
-    
+    # Parse command-line arguments
+    parser = setup_argparse()
+    parser.add_argument("--config", "-c", help="Path to configuration file (YAML or JSON)")
     args = parser.parse_args()
     
-    # Create configuration
-    config = {
-        # Model config
-        "model_name": args.model,
-        "quantization": args.quantization,
-        
-        # Thought process config
-        "thought_interval": args.thought_interval,
-        "reflection_threshold": args.reflection_threshold,
-        "max_daily_calls": args.max_daily_calls,
-        
-        # Memory config
-        "use_remote_db": args.use_remote_db,
-        "db_host": args.db_host,
-        "db_port": args.db_port,
-        "db_name": args.db_name,
-        "db_user": args.db_user,
-        "db_password": args.db_password,
-        "db_path": args.db_path,
-        "use_vectors": args.use_vectors
-    }
+    # Load configuration (from defaults, file, and CLI args)
+    config = load_config(args.config, args)
     
-    app = create_app(config)
-    app.run(host=args.host, port=args.port, debug=args.debug)
+    # Convert to flat config for compatibility with existing code
+    flat_config = get_flattened_config(config)
+    
+    # Display configuration
+    logger.info("Starting web server with configuration:")
+    for key, value in flat_config.items():
+        # Don't log password
+        if key != "db_password":
+            logger.info(f"  {key}: {value}")
+    
+    # Create and run the application
+    app = create_app(flat_config)
+    app.run(
+        host=flat_config["host"],
+        port=flat_config["port"],
+        debug=flat_config["debug"]
+    )

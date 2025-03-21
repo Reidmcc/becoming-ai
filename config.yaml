@@ -1,0 +1,46 @@
+# Becoming AI Configuration
+
+# Model configuration
+model:
+  # Local model for thought generation
+  name: "deepseek-ai/deepseek-R1-Distill-Llama-8B"
+  # Quantization level (int8, int4, or fp16)
+  quantization: "int8"
+  # Cache directory for downloaded models (optional)
+  cache_dir: "models/cache"
+
+# Frontier model configuration
+frontier:
+  # Frontier model for deeper reflections and chat
+  model: "claude-3-7-sonnet-20250219"
+  # Maximum API calls per day to manage costs
+  max_daily_calls: 100
+
+# Thought process configuration
+thought_process:
+  # Interval between thoughts in seconds
+  interval: 60.0
+
+# Memory configuration
+memory:
+  # Whether to use a remote database instead of local SQLite
+  use_remote_db: false
+  # Path to SQLite database (if using local DB)
+  db_path: "data/memories.db"
+  
+  # Remote database settings (only used if use_remote_db is true)
+  remote_db:
+    host: "localhost"
+    port: 3306
+    name: "continuous_ai"
+    user: "continuous_ai"
+    password: ""
+
+# Web server configuration
+server:
+  # Host to bind the web server
+  host: "0.0.0.0"
+  # Port for the web server
+  port: 5000
+  # Whether to run in debug mode
+  debug: false

@@ -1,72 +1,102 @@
-from memory_system import MemorySystem
+# main.py
+import os
+import logging
 import argparse
+from typing import Dict, Any
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Run the Continuous AI system")
-    
-    # Model options
-    parser.add_argument("--model", default="deepseek-ai/deepseek-R1-Distill-Llama-8B",
-                        help="Model to use for thought generation")
-    parser.add_argument("--quantization", choices=["int8", "int4", "fp16"], default="int8",
-                        help="Quantization level for model")
-    
-    # Thought process options
-    parser.add_argument("--thought-interval", type=float, default=60.0, # use int here instead of float? 
-                        help="Interval between thoughts in seconds")
-    parser.add_argument("--max-daily-calls", type=int, default=100,
-                        help="Maximum API calls to frontier model per day")
-    
-    # Memory options
-    parser.add_argument("--use-remote-db", action="store_true",
-                        help="Use remote database instead of local SQLite")
-    parser.add_argument("--db-host", default="localhost",
-                        help="Remote database host (if using remote DB)")
-    parser.add_argument("--db-port", type=int, default=3306,
-                        help="Remote database port (if using remote DB)")
-    parser.add_argument("--db-name", default="continuous_ai",
-                        help="Remote database name (if using remote DB)")
-    parser.add_argument("--db-user", default="continuous_ai",
-                        help="Remote database user (if using remote DB)")
-    parser.add_argument("--db-password", default="",
-                        help="Remote database password (if using remote DB)")
-    parser.add_argument("--db-path", default="data/memories.db",
-                        help="Path to SQLite database file (if using local DB)")
-    
-    # Vector options (can remove this is the fallback word overlap option is removed)
-    parser.add_argument("--use-vectors", action="store_true", default=True,
-                        help="Use vector embeddings for memory retrieval")
-                        
-    return parser.parse_args()
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("becoming_ai.log"),
+        logging.StreamHandler()
+    ]
+)
 
-def main(args):
-    # Create configuration
-    config = {
-        # Model config
-        "model_name": args.model,
-        "quantization": args.quantization,
+logger = logging.getLogger("BecomingAI")
+
+# Import custom modules
+from config_utils import setup_argparse, load_config, get_flattened_config
+from model_loader import LocalModelLoader
+from memory_system import MemorySystem
+from frontier_client import FrontierClient
+from thought_loop import ThoughtLoop
+
+def main():
+    """Main entry point for the Becoming AI system"""
+    
+    # Parse command-line arguments
+    parser = setup_argparse()
+    args = parser.parse_args()
+    
+    # Load configuration (from defaults, file, and CLI args)
+    config = load_config(args.config, args)
+    
+    # Convert to flat config for compatibility with existing code
+    flat_config = get_flattened_config(config)
+    
+    # Display configuration
+    logger.info("Starting Becoming AI with configuration:")
+    for key, value in flat_config.items():
+        # Don't log password
+        if key != "db_password":
+            logger.info(f"  {key}: {value}")
+    
+    # Initialize components
+    try:
+        # Initialize memory system
+        logger.info("Initializing memory system...")
+        memory_system = MemorySystem(config=flat_config)
         
-        # Thought process config
-        "thought_interval": args.thought_interval,
-        "reflection_interval": args.reflection_interval,
-        "max_daily_calls": args.max_daily_calls,
+        # Initialize model loader
+        logger.info("Initializing model loader...")
+        model_loader = LocalModelLoader(
+            model_name=flat_config["model_name"],
+            quantization=flat_config["quantization"]
+        )
         
-        # Memory config
-        "use_remote_db": args.use_remote_db,
-        "db_host": args.db_host,
-        "db_port": args.db_port,
-        "db_name": args.db_name,
-        "db_user": args.db_user,
-        "db_password": args.db_password,
-        "db_path": args.db_path,
-        "use_vectors": args.use_vectors
-    }
+        # Initialize frontier client
+        logger.info("Initializing frontier client...")
+        frontier_client = FrontierClient(
+            api_key=os.environ.get("ANTHROPIC_API_KEY"),
+            model=flat_config["frontier_model"],
+            max_daily_calls=flat_config["max_daily_calls"]
+        )
+        
+        # Initialize thought loop
+        logger.info("Initializing thought loop...")
+        thought_loop = ThoughtLoop(
+            model_loader=model_loader,
+            memory_system=memory_system,
+            frontier_client=frontier_client,
+            config=flat_config
+        )
+        
+        # Start the thought loop
+        logger.info("Starting thought loop...")
+        thought_loop.start()
+        
+        # Keep the main thread running
+        logger.info("Becoming AI system running. Press Ctrl+C to exit.")
+        try:
+            # Block main thread until interrupted
+            import time
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            logger.info("Received interrupt signal. Shutting down...")
+            thought_loop.stop()
+            model_loader.unload_model()
+            logger.info("Shutdown complete.")
     
-    # ... [initialize components with updated config] ...
+    except Exception as e:
+        logger.error(f"Error starting Becoming AI: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return 1
     
-    memory_system = MemorySystem(config=config)
+    return 0
 
-    # intialize LocalModelLoader
-
-    # intialize ThoughtLoop
-    
-    # ... [rest of the main function] ...
+if __name__ == "__main__":
+    exit(main())
