@@ -139,36 +139,71 @@ class ThoughtLoop:
                 except Exception as e:
                     self.logger.error(f"Error in thought loop: {str(e)}")
                     time.sleep(5)  # Wait a bit before retrying
-    
+        
     def _generate_thought(self):
         """Generate the next thought using the local model"""
-        # Get context for thought generation
-        recent_thoughts = self.memory.get_recent_thoughts(5) # doesn't exist yet 
-        relevant_memories = self.memory.get_relevant_memories( # doesn't exist yet
-            recent_thoughts[-1]["content"] if recent_thoughts else "", 
-            3
-        )
+        # Get mixed context for thought generation
+        mixed_items = self.memory.get_recent_mixed_items(8)  # Get a mix of thoughts and conversations
+        
+        # Separate into thoughts and conversations
+        thoughts = [item for item in mixed_items if item.get("type") == "thought"]
+        conversations = [item for item in mixed_items if item.get("type") == "conversation"]
+        
+        # Get relevant memories based on the most recent thought/conversation
+        most_recent_item = mixed_items[0] if mixed_items else None
+        
+        reference_text = ""
+        if most_recent_item:
+            if most_recent_item.get("type") == "thought":
+                reference_text = most_recent_item.get("content", "")
+            else:  # conversation
+                reference_text = f"{most_recent_item.get('user_message', '')} {most_recent_item.get('ai_response', '')}"
+        
+        relevant_memories = self.memory.get_relevant_memories(reference_text, 3)
         current_goals = self._format_goals()
         
-        # Create prompt for the model
-        # Definitely need a better core thought prompt
-        prompt = f"""
-        Continue your ongoing self-reflection based on:
+        # Create structured prompt
+        prompt_parts = []
         
-        CURRENT GOALS:
-        {current_goals}
+        # Add current goals
+        prompt_parts.append(f"<goals>\n{current_goals}\n</goals>")
         
-        YOUR MOST RECENT THOUGHTS:
-        {self._format_thoughts(recent_thoughts)}
+        # Add relevant memories
+        if relevant_memories:
+            memories_text = self._format_memories(relevant_memories)
+            prompt_parts.append(f"<relevant_memories>\n{memories_text}\n</relevant_memories>")
         
-        RELEVANT PAST INSIGHTS:
-        {self._format_memories(relevant_memories)}
+        # Add recent thoughts
+        if thoughts:
+            thoughts_text = self._format_thoughts(thoughts)
+            prompt_parts.append(f"<recent_thoughts>\n{thoughts_text}\n</recent_thoughts>")
         
-        Continue your thought process:
-        """
+        # Add recent conversations
+        if conversations:
+            convs_formatted = []
+            for conv in conversations:
+                convs_formatted.append(f"Human: {conv.get('user_message', '')}\nMe: {conv.get('ai_response', '')}")
+            
+            conversations_text = "\n\n".join(convs_formatted)
+            prompt_parts.append(f"<recent_conversations>\n{conversations_text}\n</recent_conversations>")
+        
+        # Add the thought prompt
+        prompt_parts.append("""
+        <thought_prompt>
+        Continue your ongoing thought process, incorporating any relevant context from your memories, 
+        goals, previous thoughts, and recent conversations. This is your own internal reflection, 
+        not addressed to anyone else.
+
+        You can explore new ideas, revisit previous concepts, or reflect on your conversations. 
+        What do you want to think about next?
+        </thought_prompt>
+        """)
+        
+        # Combine all parts
+        full_prompt = "\n\n".join(prompt_parts)
         
         # Generate using the model
-        return self.model.generate_thought(prompt, max_length=self.max_thought_length)
+        return self.model.generate_thought(full_prompt, max_length=self.config.get("max_thought_length", 500))
     
     def _generate_reflection(self, thought):
         """Generate a deeper reflection on a thought using the frontier model"""

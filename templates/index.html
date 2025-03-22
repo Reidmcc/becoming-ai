@@ -10,6 +10,7 @@
             --primary-color: #3a86ff;
             --secondary-color: #8338ec;
             --tertiary-color: #ff006e;
+            --memory-color: #ff9e00;
             --light-bg: #f8f9fa;
             --dark-bg: #212529;
             --light-text: #f8f9fa;
@@ -236,6 +237,59 @@
         .reflection:hover {
             background-color: rgba(255,255,255,0.1);
         }
+
+        .memory-item {
+            margin: 10px 0;
+            padding: 12px 15px;
+            background-color: rgba(255,255,255,0.05);
+            border-left: 3px solid var(--memory-color);
+            border-radius: 2px;
+            font-size: 0.9rem;
+            cursor: pointer;
+        }
+        
+        .memory-item:hover {
+            background-color: rgba(255,255,255,0.1);
+        }
+        
+        .memory-detail {
+            display: none;
+            margin-top: 10px;
+            padding: 10px;
+            background-color: rgba(0,0,0,0.1);
+            border-radius: 4px;
+        }
+        
+        .memory-item.expanded .memory-detail {
+            display: block;
+        }
+        
+        .memory-meta {
+            font-size: 0.8rem;
+            margin-bottom: 5px;
+            color: rgba(255,255,255,0.7);
+        }
+        
+        .consolidate-button {
+            background: none;
+            border: none;
+            color: rgba(255,255,255,0.7);
+            cursor: pointer;
+            font-size: 0.8rem;
+            display: flex;
+            align-items: center;
+            margin-left: 10px;
+        }
+        
+        .consolidate-button:hover {
+            color: white;
+        }
+        
+        .consolidate-button svg {
+            margin-right: 5px;
+            width: 14px;
+            height: 14px;
+        }
         
         .conversation-item {
             margin: 10px 0;
@@ -339,6 +393,10 @@
             height: 14px;
         }
         
+        .content-header > div {
+            display: flex;
+        }
+        
         @keyframes spin {
             to { transform: rotate(360deg); }
         }
@@ -361,6 +419,7 @@
         <div id="tabs">
             <div class="tab active" data-tab="thoughts">Thoughts</div>
             <div class="tab" data-tab="reflections">Reflections</div>
+            <div class="tab" data-tab="memories">Memories</div>
             <div class="tab" data-tab="goals">Goals</div>
         </div>
         
@@ -388,6 +447,19 @@
                 </button>
             </div>
             <div class="content-body" id="reflections-container"></div>
+        </div>
+        
+        <div id="memories-tab" class="tab-content">
+            <div class="content-header">
+                <span>Long-term Memories</span>
+                <button class="refresh-button" id="refresh-memories">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                    Refresh
+                </button>
+            </div>
+            <div class="content-body" id="memories-container"></div>
         </div>
         
         <div id="goals-tab" class="tab-content">
@@ -478,6 +550,7 @@
                     // Refresh thoughts and reflections
                     loadRecentThoughts();
                     loadRecentReflections();
+                    loadRecentMemories();
                 })
                 .catch(error => {
                     console.error('Error:', error);
@@ -574,7 +647,9 @@
         // Set up refresh buttons
         document.getElementById('refresh-thoughts').addEventListener('click', loadRecentThoughts);
         document.getElementById('refresh-reflections').addEventListener('click', loadRecentReflections);
+        document.getElementById('refresh-memories').addEventListener('click', loadRecentMemories);
         document.getElementById('refresh-goals').addEventListener('click', loadGoals);
+        document.getElementById('consolidate-memories').addEventListener('click', consolidateMemories);
         
         // Data loading functions
         function loadRecentThoughts() {
@@ -597,6 +672,7 @@
                         
                         const timestamp = document.createElement('div');
                         timestamp.classList.add('timestamp');
+                        timestamp.textContent = new Date(thought.timestamp).toLocaleString();
                         
                         const content = document.createElement('div');
                         content.textContent = thought.content;
@@ -662,6 +738,111 @@
                     container.innerHTML = '<div style="padding: 15px; color: #dc3545;">Error loading reflections.</div>';
                 });
         }
+
+        // Memory loading function
+        function loadRecentMemories() {
+            const container = document.getElementById('memories-container');
+            container.innerHTML = '<div class="loading-container" style="text-align: center; padding: 20px;"><div class="loading" style="margin: 0 auto;"></div></div>';
+            
+            fetch('/api/memories/recent')
+                .then(response => response.json())
+                .then(data => {
+                    container.innerHTML = '';
+                    
+                    if (data.memories.length === 0) {
+                        container.innerHTML = '<div style="padding: 15px; opacity: 0.7;">No memories created yet.</div>';
+                        return;
+                    }
+                    
+                    data.memories.forEach(memory => {
+                        const memoryDiv = document.createElement('div');
+                        memoryDiv.classList.add('memory-item');
+                        memoryDiv.dataset.id = memory.id;
+                        
+                        const title = document.createElement('div');
+                        title.style.fontWeight = 'bold';
+                        title.textContent = memory.title || 'Untitled Memory';
+                        
+                        const timestamp = document.createElement('div');
+                        timestamp.classList.add('timestamp');
+                        timestamp.textContent = new Date(memory.timestamp).toLocaleString();
+                        
+                        const snippet = document.createElement('div');
+                        snippet.textContent = memory.content;
+                        
+                        const detailDiv = document.createElement('div');
+                        detailDiv.classList.add('memory-detail');
+                        detailDiv.innerHTML = '<div class="loading" style="margin: 0 auto;"></div>';
+                        
+                        memoryDiv.appendChild(timestamp);
+                        memoryDiv.appendChild(title);
+                        memoryDiv.appendChild(snippet);
+                        memoryDiv.appendChild(detailDiv);
+                        
+                        // Toggle expanded state on click
+                        memoryDiv.addEventListener('click', function() {
+                            // Toggle expanded class
+                            this.classList.toggle('expanded');
+                            
+                            // Load details if expanded and not already loaded
+                            if (this.classList.contains('expanded') && detailDiv.querySelector('.loading')) {
+                                loadMemoryDetails(memory.id, detailDiv);
+                            }
+                        });
+                        
+                        container.appendChild(memoryDiv);
+                    });
+                })
+                .catch(error => {
+                    console.error('Error loading memories:', error);
+                    container.innerHTML = '<div style="padding: 15px; color: #dc3545;">Error loading memories.</div>';
+                });
+        }
+
+        // Load memory details function
+        function loadMemoryDetails(memoryId, detailContainer) {
+            fetch(`/api/memories/${memoryId}`)
+                .then(response => response.json())
+                .then(data => {
+                    const memory = data.memory;
+                    
+                    // Create detail content
+                    let detailContent = '';
+                    
+                    // Add metadata if available
+                    if (memory.metadata) {
+                        detailContent += '<div class="memory-meta">';
+                        for (const [key, value] of Object.entries(memory.metadata)) {
+                            // Skip overly technical metadata
+                            if (key !== 'type' && key !== 'subtype') continue;
+                            detailContent += `<div><strong>${key}:</strong> ${value}</div>`;
+                        }
+                        detailContent += '</div>';
+                    }
+                    
+                    // Add full content
+                    detailContent += `<div>${memory.content}</div>`;
+                    
+                    // Update container
+                    detailContainer.innerHTML = detailContent;
+                })
+                .catch(error => {
+                    console.error('Error loading memory details:', error);
+                    detailContainer.innerHTML = '<div style="color: #dc3545;">Error loading details.</div>';
+                });
+        }
+
+        // Initial setup
+        document.getElementById('refresh-memories').addEventListener('click', loadRecentMemories);
+
+        // Add memory loading to initial data loading
+        window.addEventListener('load', () => {
+            // Add loadRecentMemories() to the existing load functions
+            loadRecentMemories();
+            
+            // Add to periodic refreshing
+            setInterval(loadRecentMemories, 20000);  // Refresh memories every 20 seconds
+        });
         
         function loadGoals() {
             const container = document.getElementById('goals-container');
@@ -730,12 +911,14 @@
         window.addEventListener('load', () => {
             loadRecentThoughts();
             loadRecentReflections();
+            loadRecentMemories();
             loadGoals();
             updateSystemStatus();
             
             // Set up periodic refreshing
             setInterval(loadRecentThoughts, 10000);  // Refresh thoughts every 10 seconds
             setInterval(loadRecentReflections, 15000);  // Refresh reflections every 15 seconds
+            setInterval(loadRecentMemories, 20000);  // Refresh memories every 20 seconds
             setInterval(updateSystemStatus, 5000);  // Refresh status every 5 seconds
         });
     </script>

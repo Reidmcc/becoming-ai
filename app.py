@@ -1,7 +1,7 @@
-# app.py
 import os
 import logging
 from flask import Flask, render_template, jsonify, request, redirect, url_for
+import json
 
 # Configure logging
 logging.basicConfig(
@@ -18,6 +18,9 @@ logger = logging.getLogger("ContinuousAI")
 # Import configuration utilities
 from config_utils import setup_argparse, load_config, get_flattened_config
 
+# Import memory system integration
+from memory_system_integration import initialize_memory_system
+
 def create_app(config=None):
     """Create and configure the Flask application"""
     app = Flask(__name__)
@@ -25,7 +28,6 @@ def create_app(config=None):
     
     # Initialize components
     from model_loader import LocalModelLoader
-    from memory_system import MemorySystem
     from frontier_client import FrontierClient
     from thought_loop import ThoughtLoop
     from interface import ChatInterface
@@ -38,7 +40,9 @@ def create_app(config=None):
     logger.info("Initializing system components...")
     
     try:
-        memory_system = MemorySystem(config=config)
+        # Initialize memory system with chat exports if available
+        chat_exports_path = config.get('chat_exports_path', 'data/chat_exports.json')
+        memory_system = initialize_memory_system(config, chat_exports_path)
         logger.info("Memory system initialized")
         
         model_loader = LocalModelLoader(
@@ -127,6 +131,45 @@ def create_app(config=None):
         
         return jsonify({"reflections": formatted})
     
+    # Memories API endpoints
+    @app.route('/api/memories/recent', methods=['GET'])
+    def get_recent_memories():
+        limit = request.args.get('limit', 10, type=int)
+        # This assumes the memory system has a get_recent_memories method
+        memories = memory_system._get_all_memories()[:limit]
+        
+        # Format for JSON response
+        formatted = []
+        for memory in memories:
+            formatted.append({
+                "id": memory["id"],
+                "title": memory.get("title", "Untitled Memory"),
+                "content": memory["content"][:200] + "..." if len(memory["content"]) > 200 else memory["content"],
+                "timestamp": memory["timestamp"].isoformat() if hasattr(memory["timestamp"], "isoformat") else str(memory["timestamp"]),
+                "type": memory.get("metadata", {}).get("type", "general")
+            })
+        
+        return jsonify({"memories": formatted})
+    
+    @app.route('/api/memories/<memory_id>', methods=['GET'])
+    def get_memory_detail(memory_id):
+        memory = memory_system.get_memory(memory_id)
+        
+        if not memory:
+            return jsonify({"error": "Memory not found"}), 404
+        
+        # Format for JSON response
+        formatted = {
+            "id": memory["id"],
+            "title": memory.get("title", "Untitled Memory"),
+            "content": memory["content"],
+            "timestamp": memory["timestamp"].isoformat() if hasattr(memory["timestamp"], "isoformat") else str(memory["timestamp"]),
+            "metadata": memory.get("metadata", {}),
+            "source_thoughts": memory.get("source_thoughts", [])
+        }
+        
+        return jsonify({"memory": formatted})
+    
     # System control API endpoints
     @app.route('/api/system/start', methods=['POST'])
     def start_system():
@@ -150,7 +193,20 @@ def create_app(config=None):
             "paused": thought_loop.paused,
             "thought_count": thought_loop.thought_count,
             "api_calls_today": frontier_client.calls_today,
-            "api_calls_remaining": frontier_client.max_daily_calls - frontier_client.calls_today
+            "api_calls_remaining": frontier_client.max_daily_calls - frontier_client.calls_today,
+            "memory_count": len(memory_system._get_all_memories())
+        })
+    
+    # Memory management endpoint
+    @app.route('/api/memories/consolidate', methods=['POST'])
+    def consolidate_memories():
+        # Trigger memory consolidation (optional parameters could be added)
+        consolidated_ids = memory_system.auto_consolidate_memories()
+        
+        return jsonify({
+            "success": True,
+            "consolidated_count": len(consolidated_ids),
+            "consolidated_ids": consolidated_ids
         })
     
     # Goal management API endpoints
@@ -193,10 +249,15 @@ if __name__ == '__main__':
     # Parse command-line arguments
     parser = setup_argparse()
     parser.add_argument("--config", "-c", help="Path to configuration file (YAML or JSON)")
+    parser.add_argument("--chat-exports", help="Path to chat exports JSON file")
     args = parser.parse_args()
     
     # Load configuration (from defaults, file, and CLI args)
     config = load_config(args.config, args)
+    
+    # Add chat exports path to config if provided
+    if args.chat_exports:
+        config["chat_exports_path"] = args.chat_exports
     
     # Convert to flat config for compatibility with existing code
     flat_config = get_flattened_config(config)

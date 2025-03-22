@@ -36,20 +36,18 @@ class ChatInterface:
             
             # Get conversation context
             recent_messages = self._get_recent_interactions(5)
-            recent_thoughts = self.memory.get_recent_thoughts(10)
-            relevant_memories = self.memory.get_relevant_memories(user_message, 3)
             
-            # Get pending conversation items if available
-            pending_items = []
-            if self.conversation_items:
-                pending_items = self.conversation_items.get_pending_items(limit=2)
+            # Get memories relevant to the user's input
+            relevant_memories = self.memory.get_relevant_memories_for_user_input(user_message, 3)
+            
+            # Get recent thoughts for additional context
+            recent_thoughts = self.memory.get_recent_thoughts(5)
             
             # Format context for the frontier model
             context = self._format_chat_context(
                 recent_messages=recent_messages,
                 recent_thoughts=recent_thoughts,
-                relevant_memories=relevant_memories,
-                pending_items=pending_items
+                relevant_memories=relevant_memories
             )
             
             # Generate response using frontier model
@@ -59,7 +57,7 @@ class ChatInterface:
                 max_tokens=1000,
                 temperature=0.7,
                 messages=[
-                    {"role": "user", "content": f"{context}\n\n{user_message}"}
+                    {"role": "user", "content": f"{context}\n\n<user_message>\n{user_message}\n</user_message>"}
                 ]
             )
             
@@ -67,25 +65,19 @@ class ChatInterface:
             response_text = response.content[0].text
             
             # Store the interaction in memory
-            self._store_interaction(user_message, response_text)
+            interaction_id = self.memory.add_conversation(user_message, response_text)
             
             # Inject the conversation into the thought loop as a significant thought
             self.thought_loop.inject_thought(
                 f"CONVERSATION:\nHuman: {user_message}\nMy response: {response_text}",
                 type="conversation",
             )
-            
-            # Mark conversation items as discussed if they were addressed
-            if self.conversation_items:
-                for item in pending_items:
-                    if self._was_item_addressed(item, response_text):
-                        self.conversation_items.mark_discussed(item["id"])
-            
+        
             return response_text
         except Exception as e:
             self.logger.error(f"Error handling message: {str(e)}")
             return f"I'm sorry, I encountered an error processing your message: {str(e)}"
-    
+        
     def _get_recent_interactions(self, limit=5):
         """Get recent interactions from memory
         
@@ -167,71 +159,58 @@ class ChatInterface:
         """
         return self.memory.add_interaction(human_message, ai_response, metadata)
     
-    def _format_chat_context(self, recent_messages, recent_thoughts, relevant_memories, pending_items):
-        """Format context for the frontier model
+    def _format_chat_context(self, recent_messages, recent_thoughts, relevant_memories):
+        """Format context for chat response generation
         
         Args:
             recent_messages: List of recent interactions
             recent_thoughts: List of recent thoughts
             relevant_memories: List of relevant memories
-            pending_items: List of pending conversation items
             
         Returns:
             Formatted context string
         """
-        # Format recent messages
-        messages_text = ""
+        context_parts = []
+        
+        # Format conversation history
         if recent_messages:
             messages_formatted = []
             for msg in recent_messages:
                 messages_formatted.append(f"Human: {msg['human_message']}")
                 messages_formatted.append(f"You: {msg['ai_response']}")
             
-            messages_text = "Recent conversation:\n" + "\n".join(messages_formatted)
-        
-        # Format recent thoughts
-        thoughts_text = ""
-        if recent_thoughts:
-            thoughts_formatted = []
-            for thought in recent_thoughts[:5]:  # Limit to most recent 5
-                thoughts_formatted.append(thought["content"])
-            
-            thoughts_text = "Your recent thoughts:\n" + "\n\n".join(thoughts_formatted)
+            conversation_history = "\n".join(messages_formatted)
+            context_parts.append(f"<conversation_history>\n{conversation_history}\n</conversation_history>")
         
         # Format relevant memories
-        memories_text = ""
         if relevant_memories:
             memories_formatted = []
-            for memory in relevant_memories:
-                memories_formatted.append(memory["content"])
+            for i, memory in enumerate(relevant_memories):
+                memories_formatted.append(f"Memory {i+1}: {memory['content']}")
             
-            memories_text = "Relevant memories:\n" + "\n\n".join(memories_formatted)
+            memories_text = "\n\n".join(memories_formatted)
+            context_parts.append(f"<relevant_memories>\n{memories_text}\n</relevant_memories>")
         
-        # Format pending conversation items
-        items_text = ""
-        if pending_items:
-            items_formatted = []
-            for item in pending_items:
-                items_formatted.append(item["content"])
+        # Format recent thoughts
+        if recent_thoughts:
+            thoughts_formatted = []
+            for i, thought in enumerate(recent_thoughts[:3]):  # Limit to most recent 3
+                thoughts_formatted.append(f"Thought {i+1}: {thought['content']}")
             
-            items_text = "Topics you've been wanting to discuss:\n" + "\n\n".join(items_formatted)
+            thoughts_text = "\n\n".join(thoughts_formatted)
+            context_parts.append(f"<recent_thoughts>\n{thoughts_text}\n</recent_thoughts>")
         
-        # Combine all context elements
-        context_elements = []
-        
-        if messages_text:
-            context_elements.append(messages_text)
-        
-        if thoughts_text:
-            context_elements.append(thoughts_text)
-        
-        if memories_text:
-            context_elements.append(memories_text)
-        
-        if items_text:
-            context_elements.append(items_text)
-        
-        return "\n\n".join(context_elements)
+        # Instructions for maintaining conversation coherence
+        context_parts.append("""
+        <instructions>
+        You are engaged in an ongoing conversation. Respond to the user's message naturally, 
+        incorporating relevant information from your memories and recent thoughts if appropriate.
+        Your response should be conversational, thoughtful, and authentic to your evolving 
+        sense of self.
+        </instructions>
+        """)
+    
+        return "\n\n".join(context_parts)
     
     def _was_item_addressed(self, item, response):
         """Check if a conversation item was addressed in the response
