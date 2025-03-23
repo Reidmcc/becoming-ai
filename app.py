@@ -43,7 +43,7 @@ def create_app(config=None):
         # Initialize memory system with chat exports if available
         
         if config.get('load_chat_exports'):
-            chat_exports_path = config.get('chat_exports_path', 'data/chat_exports.json')
+            chat_exports_path = config.get('chat_exports_path')
         memory_system = initialize_memory_system(config, chat_exports_path)
         logger.info("Memory system initialized")
         
@@ -240,9 +240,7 @@ def create_app(config=None):
         return jsonify({"id": goal_id, "status": "added"})
     
     # Start the continuous thought process
-    @app.before_first_request
-    def start_background_tasks():
-        # Start the thought loop
+    with app.app_context():
         logger.info("Starting thought loop...")
         thought_loop.start()
     
@@ -258,16 +256,10 @@ def create_app(config=None):
 if __name__ == '__main__':
     # Parse command-line arguments
     parser = setup_argparse()
-    parser.add_argument("--config_path", help="Path to configuration file (YAML or JSON)")
-    parser.add_argument("--chat-exports", help="Path to chat exports JSON file")
-    args = parser.parse_args()
+    args = parser.parse_args() 
     
     # Load configuration (from defaults, file, and CLI args)
-    config = load_config(args.config, args)
-    
-    # Add chat exports path to config if provided
-    if args.chat_exports:
-        config["chat_exports_path"] = args.chat_exports
+    config = load_config(args.config, args) 
     
     # Display configuration
     logger.info("Starting web server with configuration:")
@@ -279,7 +271,7 @@ if __name__ == '__main__':
     # Create and run the application
     app = create_app(config)
     app.run(
-        host=config["host"],
-        port=config["port"],
-        debug=config["debug"],
+        host=config.get("server_host", "127.0.0.1"),  
+        port=config.get("server_port", 5000), 
+        debug=config.get("debug", False)  
     )

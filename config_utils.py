@@ -27,7 +27,6 @@ def setup_argparse() -> argparse.ArgumentParser:
     parser.add_argument("--frontier-model", help="Frontier model to use for reflections")
     
     # Thought process options
-    parser = parser.add_argument_group("Thought Process Options")
     parser.add_argument("--thought-interval", type=float, help="Interval between thoughts in seconds")
     parser.add_argument("--max-daily-calls", type=int, help="Maximum API calls to frontier model per day")
     
@@ -86,10 +85,11 @@ def get_default_config() -> Dict[str, Any]:
         "server_port": 5000,
         
         # Additional settings
-        "load_chat_exports": False
+        "load_chat_exports": False,
+        "chat_exports_path": "data/chat_exports.json"
     }
 
-def load_config_file(config_path: str) -> Dict[str, Any]:
+def load_config_file(config: str) -> Dict[str, Any]:
     """
     Load configuration from a file.
     
@@ -99,20 +99,20 @@ def load_config_file(config_path: str) -> Dict[str, Any]:
     Returns:
         Dict containing configuration values
     """
-    if not os.path.exists(config_path):
-        logger.warning(f"Configuration file not found: {config_path}")
+    if not os.path.exists(config):
+        logger.warning(f"Configuration file not found: {config}")
         return {}
     
     try:
-        with open(config_path, 'r') as f:
+        with open(config, 'r') as f:
             config = yaml.safe_load(f)
-        logger.info(f"Loaded configuration from {config_path}")
+        logger.info(f"Loaded configuration from {config}")
         return config
     except Exception as e:
         logger.error(f"Error loading configuration file: {str(e)}")
         return {}
 
-def load_config(config_path: Optional[str] = None, cli_args: Optional[argparse.Namespace] = None) -> Dict[str, Any]:
+def load_config(config_path, cli_args: Optional[argparse.Namespace] = None) -> Dict[str, Any]:
     """
     Load configuration from defaults, file, and CLI arguments.
     
@@ -127,7 +127,7 @@ def load_config(config_path: Optional[str] = None, cli_args: Optional[argparse.N
     config = get_default_config()
     
     # Load configuration from file if provided
-    if config_path:
+    if config:
         file_config = load_config_file(config_path)
         # Update config with file values (that aren't None)
         for key, value in file_config.items():
