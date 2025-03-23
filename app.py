@@ -8,12 +8,12 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler("continuous_ai.log"),
+        logging.FileHandler("becoming_ai.log"),
         logging.StreamHandler()
     ]
 )
 
-logger = logging.getLogger("ContinuousAI")
+logger = logging.getLogger("BecomingAI")
 
 # Import configuration utilities
 from config_utils import setup_argparse, load_config, get_flattened_config
@@ -32,6 +32,10 @@ def create_app(config=None):
     from thought_loop import ThoughtLoop
     from interface import ChatInterface
     
+    # temporary dedug check
+    print(f"Config type: {type(config)}")
+    print(f"Config contents: {config}")
+    print(f"DB path: {config.get('db_path', 'DEFAULT')}")
     # Ensure data directory exists
     if not config.get('use_remote_db', False):
         os.makedirs(os.path.dirname(os.path.abspath(config.get('db_path', 'data/memories.db'))), exist_ok=True)
@@ -72,6 +76,7 @@ def create_app(config=None):
             memory_system=memory_system
         )
         logger.info("Chat interface initialized")
+        app.memory_system = memory_system
         
     except Exception as e:
         logger.error(f"Error initializing components: {str(e)}")
@@ -243,12 +248,19 @@ def create_app(config=None):
         logger.info("Starting thought loop...")
         thought_loop.start()
     
+    @app.teardown_appcontext
+    def shutdown_session(exception=None):
+        """Save vector store when the application shuts down"""
+        if hasattr(app, 'memory_system'):
+            logger.info("Saving vector store before shutdown...")
+            app.memory_system.save_vector_store()
+    
     return app
 
 if __name__ == '__main__':
     # Parse command-line arguments
     parser = setup_argparse()
-    parser.add_argument("--config", "-c", help="Path to configuration file (YAML or JSON)")
+    parser.add_argument("--config_path", help="Path to configuration file (YAML or JSON)")
     parser.add_argument("--chat-exports", help="Path to chat exports JSON file")
     args = parser.parse_args()
     
@@ -274,5 +286,5 @@ if __name__ == '__main__':
     app.run(
         host=flat_config["host"],
         port=flat_config["port"],
-        debug=flat_config["debug"]
+        debug=flat_config["debug"],
     )

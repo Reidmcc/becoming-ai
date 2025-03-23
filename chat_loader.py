@@ -196,6 +196,10 @@ class ChatExportLoader:
         # In a more advanced implementation, you could use the frontier model to generate a summary
         
         exchange_count = len(exchanges)
+        if exchange_count > 1:
+            last_exchange_text = f"Last exchange:\n{last_exchange}"
+        else:
+            last_exchange_text = ""
         
         # Extract the first and last exchanges for context
         first_exchange = self._format_exchange(exchanges[0]) if exchanges else ""
@@ -207,7 +211,7 @@ Number of exchanges: {exchange_count}
 First exchange:
 {first_exchange}
 
-{f"Last exchange:\n{last_exchange}" if exchange_count > 1 else ""}
+{last_exchange_text}
 """
         
         return summary

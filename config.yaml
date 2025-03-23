@@ -27,13 +27,15 @@ memory:
   use_remote_db: false
   # Path to SQLite database (if using local DB)
   db_path: "data/memories.db"
+  # Path for vector save/load
+  vector_store_path: "data/vectors.pkl"
   
   # Remote database settings (only used if use_remote_db is true)
   remote_db:
     host: "localhost"
     port: 3306
-    name: "continuous_ai"
-    user: "continuous_ai"
+    name: "becoming_ai"
+    user: "becoming_ai"
     password: ""
 
 # Web server configuration

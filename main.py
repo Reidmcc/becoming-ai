@@ -121,6 +121,9 @@ def main():
                     f"Status: Thoughts={thought_count}, Memories={memory_count}, "
                     f"Next consolidation in {next_consolidation:.1f} minutes"
                 )
+                if hasattr(memory_system, "save_vector_store") and thought_count % 6 == 0:
+                    logger.info("Performing periodic vector store backup...")
+                    memory_system.save_vector_store()
                 
                 time.sleep(300)  # Status update every 5 minutes
                 

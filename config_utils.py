@@ -19,6 +19,7 @@ def load_config_file(config_path: str) -> Dict[str, Any]:
     Returns:
         Dict containing configuration values
     """
+    
     if not os.path.exists(config_path):
         logger.warning(f"Configuration file not found: {config_path}")
         return {}
@@ -64,13 +65,13 @@ def get_default_config() -> Dict[str, Any]:
         # Thought process configuration
         "thought_process": {
             "interval": 60.0,  # seconds
-            "max_thought_length": 200
         },
         
         # Memory configuration
         "memory": {
             "use_remote_db": False,
             "db_path": "data/memories.db",
+            "vector_store_path": "data/vectors.pkl",
             "remote_db": {
                 "host": "localhost",
                 "port": 3306,
@@ -84,7 +85,6 @@ def get_default_config() -> Dict[str, Any]:
         "server": {
             "host": "0.0.0.0",
             "port": 5000,
-            "debug": False
         }
     }
 
@@ -150,8 +150,6 @@ def merge_configs(default_config: Dict[str, Any], file_config: Dict[str, Any],
             cli_config.setdefault('server', {})['host'] = cli_args.host
         if hasattr(cli_args, 'port'):
             cli_config.setdefault('server', {})['port'] = cli_args.port
-        if hasattr(cli_args, 'debug'):
-            cli_config.setdefault('server', {})['debug'] = cli_args.debug
             
         # Apply CLI config
         config = deep_merge(config, cli_config)
@@ -256,8 +254,6 @@ def setup_argparse() -> argparse.ArgumentParser:
                         help="Host to run the web server on")
     server_group.add_argument("--port", type=int,
                         help="Port to run the web server on")
-    server_group.add_argument("--debug", action="store_true",
-                        help="Run in debug mode")
     
     return parser
 
@@ -300,6 +296,5 @@ def get_flattened_config(config: Dict[str, Any]) -> Dict[str, Any]:
     # Server config
     flat_config["host"] = config["server"]["host"]
     flat_config["port"] = config["server"]["port"]
-    flat_config["debug"] = config["server"]["debug"]
     
     return flat_config
