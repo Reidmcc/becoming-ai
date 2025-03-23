@@ -2,7 +2,7 @@
 
 # Model configuration
 # Local model for thought generation
-local_name: "deepseek-ai/deepseek-R1-Distill-Llama-8B"
+local_model: "deepseek-ai/deepseek-R1-Distill-Llama-8B"
 # Quantization level (int8, int4, or fp16)
 quantization: "int8"
 # Cache directory for downloaded models (optional)
@@ -36,3 +36,7 @@ remote_db_password: ""
 server_host: "0.0.0.0"
 # Port for the web server
 server_port: 5000
+
+# Additional settings
+load_chat_exports: True
+chat_exports_path: "data/chat_exports.json"

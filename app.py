@@ -16,7 +16,7 @@ logging.basicConfig(
 logger = logging.getLogger("BecomingAI")
 
 # Import configuration utilities
-from config_utils import setup_argparse, load_config, get_flattened_config
+from config_utils import setup_argparse, load_config
 
 # Import memory system integration
 from memory_system_integration import initialize_memory_system
@@ -32,10 +32,6 @@ def create_app(config=None):
     from thought_loop import ThoughtLoop
     from interface import ChatInterface
     
-    # temporary dedug check
-    print(f"Config type: {type(config)}")
-    print(f"Config contents: {config}")
-    print(f"DB path: {config.get('db_path', 'DEFAULT')}")
     # Ensure data directory exists
     if not config.get('use_remote_db', False):
         os.makedirs(os.path.dirname(os.path.abspath(config.get('db_path', 'data/memories.db'))), exist_ok=True)
@@ -45,7 +41,9 @@ def create_app(config=None):
     
     try:
         # Initialize memory system with chat exports if available
-        chat_exports_path = config.get('chat_exports_path', 'data/chat_exports.json')
+        
+        if config.get('load_chat_exports'):
+            chat_exports_path = config.get('chat_exports_path', 'data/chat_exports.json')
         memory_system = initialize_memory_system(config, chat_exports_path)
         logger.info("Memory system initialized")
         
@@ -271,20 +269,17 @@ if __name__ == '__main__':
     if args.chat_exports:
         config["chat_exports_path"] = args.chat_exports
     
-    # Convert to flat config for compatibility with existing code
-    flat_config = get_flattened_config(config)
-    
     # Display configuration
     logger.info("Starting web server with configuration:")
-    for key, value in flat_config.items():
+    for key, value in config.items():
         # Don't log password
         if key != "db_password":
             logger.info(f"  {key}: {value}")
     
     # Create and run the application
-    app = create_app(flat_config)
+    app = create_app(config)
     app.run(
-        host=flat_config["host"],
-        port=flat_config["port"],
-        debug=flat_config["debug"],
+        host=config["host"],
+        port=config["port"],
+        debug=config["debug"],
     )
