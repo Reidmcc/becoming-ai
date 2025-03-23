@@ -6,6 +6,8 @@ import logging
 import math
 from datetime import datetime
 import os
+import pickle
+import numpy as np
 
 class MemorySystem:
     def __init__(self, config=None):
@@ -549,3 +551,77 @@ def _check_if_memory_should_be_created(self, thought):
     # Decide based on criteria
     return recurring_theme or has_significant_keywords or has_emotional_content
 
+
+def save_vector_store(self, filepath=None):
+    """Save vector embeddings to disk
+    
+    Args:
+        filepath: Path to save vectors to (defaults to config setting or 'data/vectors.pkl')
+    
+    Returns:
+        Boolean indicating success
+    """
+    if not self.vector_store:
+        self.logger.warning("No vector store to save")
+        return False
+        
+    try:
+        # Use configured path or default
+        if filepath is None:
+            filepath = self.config.get('vector_store_path', 'data/vectors.pkl')
+            
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(os.path.abspath(filepath)), exist_ok=True)
+        
+        # Extract just the vectors (not the model) to save
+        vectors_to_save = self.vector_store["vectors"]
+        
+        self.logger.info(f"Saving {len(vectors_to_save)} vectors to {filepath}")
+        
+        with open(filepath, 'wb') as f:
+            pickle.dump(vectors_to_save, f)
+            
+        self.logger.info("Vector store saved successfully")
+        return True
+        
+    except Exception as e:
+        self.logger.error(f"Error saving vector store: {str(e)}")
+        return False
+        
+def load_vector_store(self, filepath=None):
+    """Load vector embeddings from disk
+    
+    Args:
+        filepath: Path to load vectors from (defaults to config setting or 'data/vectors.pkl')
+    
+    Returns:
+        Boolean indicating success
+    """
+    if not self.vector_store:
+        self.logger.warning("Vector store not initialized, can't load vectors")
+        return False
+        
+    try:
+        # Use configured path or default
+        if filepath is None:
+            filepath = self.config.get('vector_store_path', 'data/vectors.pkl')
+            
+        # Check if file exists
+        if not os.path.exists(filepath):
+            self.logger.info(f"No saved vectors found at {filepath}")
+            return False
+            
+        self.logger.info(f"Loading vectors from {filepath}")
+        
+        with open(filepath, 'rb') as f:
+            loaded_vectors = pickle.load(f)
+            
+        # Merge with existing vectors (if any)
+        self.vector_store["vectors"].update(loaded_vectors)
+        
+        self.logger.info(f"Loaded {len(loaded_vectors)} vectors successfully")
+        return True
+        
+    except Exception as e:
+        self.logger.error(f"Error loading vector store: {str(e)}")
+        return False
