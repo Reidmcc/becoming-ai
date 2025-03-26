@@ -6,19 +6,17 @@ from datetime import datetime
 import json
 
 class ChatInterface:
-    def __init__(self, thought_loop, frontier_client, memory_system, conversation_items=None):
+    def __init__(self, thought_loop, frontier_client, memory_system):
         """Initialize the chat interface
         
         Args:
             thought_loop: ThoughtLoop instance
             frontier_client: FrontierConsultant instance
             memory_system: MemorySystem instance
-            conversation_items: ConversationItemsGenerator instance (optional)
         """
         self.thought_loop = thought_loop
         self.frontier = frontier_client
         self.memory = memory_system
-        self.conversation_items = conversation_items
         self.logger = logging.getLogger("ChatInterface")
     
     def handle_message(self, user_message):
@@ -87,56 +85,9 @@ class ChatInterface:
         Returns:
             List of interaction dictionaries
         """
-        # Query from the memory system
-        # This is a simplified implementation - would need to be adapted based on
-        # how interactions are stored in your memory system
         try:
-            # Create query based on database type
-            if hasattr(self.memory, 'db_type') and self.memory.db_type == "remote":
-                # Remote MySQL database
-                with self.memory.db.cursor() as cursor:
-                    cursor.execute(
-                        """
-                        SELECT id, human_message, ai_response, timestamp, metadata 
-                        FROM interactions 
-                        ORDER BY timestamp DESC 
-                        LIMIT %s
-                        """,
-                        (limit,)
-                    )
-                    
-                    interactions = []
-                    for row in cursor.fetchall():
-                        interactions.append({
-                            "id": row[0],
-                            "human_message": row[1],
-                            "ai_response": row[2],
-                            "timestamp": row[3],
-                            "metadata": json.loads(row[4]) if row[4] else {}
-                        })
-            else:
-                # Local SQLite database
-                with self.memory.db:
-                    cursor = self.memory.db.cursor()
-                    cursor.execute(
-                        """
-                        SELECT id, human_message, ai_response, timestamp, metadata 
-                        FROM interactions 
-                        ORDER BY timestamp DESC 
-                        LIMIT ?
-                        """,
-                        (limit,)
-                    )
-                    
-                    interactions = []
-                    for row in cursor.fetchall():
-                        interactions.append({
-                            "id": row[0],
-                            "human_message": row[1],
-                            "ai_response": row[2],
-                            "timestamp": datetime.fromisoformat(row[3]),
-                            "metadata": json.loads(row[4]) if row[4] else {}
-                        })
+            # Get interactions using the memory system's method
+            interactions = self.memory.get_recent_interactions(limit)
             
             # Sort chronologically for context building
             interactions.sort(key=lambda x: x["timestamp"])
@@ -145,6 +96,10 @@ class ChatInterface:
         except Exception as e:
             self.logger.error(f"Error retrieving recent interactions: {str(e)}")
             return []
+
+
+     
+
     
     def _store_interaction(self, human_message, ai_response, metadata=None):
         """Store an interaction in the memory system
@@ -212,21 +167,3 @@ class ChatInterface:
     
         return "\n\n".join(context_parts)
     
-    def _was_item_addressed(self, item, response):
-        """Check if a conversation item was addressed in the response
-        
-        Args:
-            item: Conversation item dict
-            response: Response text
-            
-        Returns:
-            True if item was addressed, False otherwise
-        """
-        # Extract keywords from the item
-        keywords = self._extract_keywords(item["content"])
-        
-        # Check if significant keywords appear in the response
-        significant_matches = 0
-        for keyword in keywords:
-            if keyword.lower() in response.lower():
-                significan

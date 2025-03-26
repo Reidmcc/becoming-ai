@@ -55,7 +55,7 @@ def create_app(config=None):
         
         frontier_client = FrontierClient(
             api_key=os.environ.get("ANTHROPIC_API_KEY"),
-            model=config.get("frontier_model", "claude-3-7-sonnet-20250219"),
+            model=config.get("frontier_model", "claude-3-7-sonnet-latest"),
             max_daily_calls=config.get("max_daily_calls", 100)
         )
         logger.info("Frontier client initialized")
@@ -101,7 +101,7 @@ def create_app(config=None):
     @app.route('/api/thoughts/recent', methods=['GET'])
     def get_recent_thoughts():
         limit = request.args.get('limit', 20, type=int)
-        thoughts = memory_system.get_recent_thoughts(limit)
+        thoughts = memory_system.get_recent_mixed_items(limit)
         
         # Format for JSON response
         formatted = []
@@ -149,7 +149,6 @@ def create_app(config=None):
                 "title": memory.get("title", "Untitled Memory"),
                 "content": memory["content"][:200] + "..." if len(memory["content"]) > 200 else memory["content"],
                 "timestamp": memory["timestamp"].isoformat() if hasattr(memory["timestamp"], "isoformat") else str(memory["timestamp"]),
-                "type": memory.get("metadata", {}).get("type", "general")
             })
         
         return jsonify({"memories": formatted})
@@ -200,18 +199,7 @@ def create_app(config=None):
             "memory_count": len(memory_system._get_all_memories())
         })
     
-    # Memory management endpoint
-    @app.route('/api/memories/consolidate', methods=['POST'])
-    def consolidate_memories():
-        # Trigger memory consolidation (optional parameters could be added)
-        consolidated_ids = memory_system.auto_consolidate_memories()
-        
-        return jsonify({
-            "success": True,
-            "consolidated_count": len(consolidated_ids),
-            "consolidated_ids": consolidated_ids
-        })
-    
+     
     # Goal management API endpoints
     @app.route('/api/goals', methods=['GET'])
     def get_goals():

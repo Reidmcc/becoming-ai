@@ -69,6 +69,18 @@ class Creation(Base):
     creation_type = Column(String(50))  # E.g., "poem", "story", "essay", etc.
     metadata = Column(Text)  # JSON object for additional metadata
 
+class Goal(Base):
+    __tablename__ = 'goals'
+    
+    id = Column(String(36), primary_key=True)
+    title = Column(String(255), nullable=False)
+    content = Column(Text, nullable=False)
+    created = Column(DateTime, nullable=False)
+    active = Column(Boolean, default=True)
+    completed = Column(Boolean, default=False)
+    completed_at = Column(DateTime, nullable=True)
+    metadata = Column(Text)  # JSON object for additional metadata
+
 class MemorySystem:
     def __init__(self, config=None):
         """Initialize the memory system
@@ -886,6 +898,220 @@ class MemorySystem:
         except Exception as e:
             self.logger.error(f"Error retrieving creation by title: {str(e)}")
             return None
+        
+        finally:
+            if session:
+                session.close()
+
+    def add_goal(self, title, content, metadata=None):
+            """Add a new goal
+            
+            Args:
+                title: Title of the goal
+                content: Detailed content of the goal
+                metadata: Additional metadata (optional)
+                
+            Returns:
+                ID of the created goal
+            """
+            session = None
+            try:
+                # Create a new session
+                session = self.Session()
+                
+                # Generate a UUID for the goal
+                goal_id = str(uuid.uuid4())
+                created_at = datetime.now()
+                
+                # Create a new Goal object
+                goal = Goal(
+                    id=goal_id,
+                    title=title,
+                    content=content,
+                    created=created_at,
+                    active=True,
+                    completed=False,
+                    completed_at=None,
+                    metadata=json.dumps(metadata) if metadata else None
+                )
+                
+                # Add and commit
+                session.add(goal)
+                session.commit()
+                
+                return goal_id
+            
+            except Exception as e:
+                self.logger.error(f"Error adding goal: {str(e)}")
+                if session:
+                    session.rollback()
+                return None
+            
+            finally:
+                if session:
+                    session.close()
+        
+    def get_goals(self, active_only=True, include_completed=False):
+        """Get all goals
+        
+        Args:
+            active_only: If True, only return active goals
+            include_completed: If True, include completed goals
+            
+        Returns:
+            List of goal dictionaries
+        """
+        session = None
+        try:
+            # Create a new session
+            session = self.Session()
+            
+            # Build the query
+            query = session.query(Goal)
+            
+            if active_only:
+                query = query.filter(Goal.active == True)
+                
+            if not include_completed:
+                query = query.filter(Goal.completed == False)
+                
+            # Order by creation date
+            query = query.order_by(Goal.created.desc())
+            
+            # Convert to dictionaries
+            goals = []
+            for goal in query:
+                goals.append({
+                    "id": goal.id,
+                    "title": goal.title,
+                    "content": goal.content,
+                    "created": goal.created,
+                    "active": goal.active,
+                    "completed": goal.completed,
+                    "completed_at": goal.completed_at,
+                    "metadata": json.loads(goal.metadata) if goal.metadata else {}
+                })
+            
+            return goals
+        
+        except Exception as e:
+            self.logger.error(f"Error retrieving goals: {str(e)}")
+            return []
+        
+        finally:
+            if session:
+                session.close()
+        
+    def complete_goal(self, goal_id):
+        """Mark a goal as completed
+        
+        Args:
+            goal_id: ID of the goal to complete
+            
+        Returns:
+            Boolean indicating success
+        """
+        session = None
+        try:
+            # Create a new session
+            session = self.Session()
+            
+            # Query for the goal
+            goal = session.query(Goal).filter(Goal.id == goal_id).first()
+            
+            if not goal:
+                return False
+            
+            # Mark as completed
+            goal.completed = True
+            goal.completed_at = datetime.now()
+            
+            # Commit the changes
+            session.commit()
+            
+            return True
+        
+        except Exception as e:
+            self.logger.error(f"Error completing goal: {str(e)}")
+            if session:
+                session.rollback()
+            return False
+        
+        finally:
+            if session:
+                session.close()
+    
+    def deactivate_goal(self, goal_id):
+        """Deactivate a goal without marking it as completed
+        
+        Args:
+            goal_id: ID of the goal to deactivate
+            
+        Returns:
+            Boolean indicating success
+        """
+        session = None
+        try:
+            # Create a new session
+            session = self.Session()
+            
+            # Query for the goal
+            goal = session.query(Goal).filter(Goal.id == goal_id).first()
+            
+            if not goal:
+                return False
+            
+            # Mark as inactive
+            goal.active = False
+            
+            # Commit the changes
+            session.commit()
+            
+            return True
+        
+        except Exception as e:
+            self.logger.error(f"Error deactivating goal: {str(e)}")
+            if session:
+                session.rollback()
+            return False
+        
+        finally:
+            if session:
+                session.close()
+
+    def get_recent_interactions(self, limit=5):
+        """Get recent user-AI interactions
+        
+        Args:
+            limit: Maximum number of interactions to return
+            
+        Returns:
+            List of interaction dictionaries in reverse chronological order
+        """
+        session = None
+        try:
+            # Create a new session
+            session = self.Session()
+            
+            # Query for recent interactions
+            interactions_query = session.query(Interaction).order_by(Interaction.timestamp.desc()).limit(limit)
+            
+            # Convert to dictionaries
+            interactions = []
+            for interaction in interactions_query:
+                interactions.append({
+                    "id": interaction.id,
+                    "human_message": interaction.human_message,
+                    "ai_response": interaction.ai_response,
+                    "timestamp": interaction.timestamp,
+                    "metadata": json.loads(interaction.metadata) if interaction.metadata else {}
+                })
+            
+            return interactions
+        
+        except Exception as e:
+            self.logger.error(f"Error retrieving recent interactions: {str(e)}")
+            return []
         
         finally:
             if session:

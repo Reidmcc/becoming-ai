@@ -58,7 +58,7 @@ def get_default_config() -> Dict[str, Any]:
         # Model configuration
         "model_name": "deepseek-ai/deepseek-R1-Distill-Llama-8B",
         "quantization": "int8",
-        "cache_dir": "models/cache",
+        # "cache_dir": "models/cache",
         
         # Frontier model configuration
         "frontier_model": "claude-3-7-sonnet-20250219",

@@ -253,25 +253,35 @@ class ThoughtLoop:
         
         return thought_id
     
-    def add_goal(self, goal_text):
-        """Add a new goal to guide the thought process"""
-        goal_id = str(uuid.uuid4())
-        goal = {
-            "id": goal_id,
-            "content": goal_text,
-            "created": datetime.now(),
-            "active": True
-        }
+    def add_goal(self, title, content=None):
+        """Add a new goal to guide the thought process
         
-        self.goals.append(goal)
+        Args:
+            title: Title/summary of the goal
+            content: Optional detailed description of the goal
+            
+        Returns:
+            ID of the created goal
+        """
+        # If content is not provided, use the title as content
+        if content is None:
+            content = title
         
-        # Also inject as a thought
-        self.inject_thought(
-            f"NEW GOAL: {goal_text}",
-            type="goal",
-        )
-        
+        # Add goal to memory system
+        goal_id = self.memory.add_goal(title, content)
+
         return goal_id
+        
+    def get_goals(self, include_completed=False):
+        """Get all active goals
+        
+        Args:
+            include_completed: Whether to include completed goals
+            
+        Returns:
+            List of goal dictionaries
+        """
+        return self.memory.get_goals(active_only=True, include_completed=include_completed)
     
     def get_goals(self):
         """Get all active goals"""
@@ -349,7 +359,8 @@ class ThoughtLoop:
         command_patterns = [
             (r'<think_deeper>', self._handle_think_deeper),
             (r'<get_goals>', self._handle_get_goals),
-            (r'<add_goal\(([^)]+)\)>', self._handle_add_goal),
+            (r'<add_goal\(([^,]+),\s*(.*?)\)>', self._handle_add_goal),
+            (r'<complete_goal\(([^)]+)\)>', self._handle_complete_goal),
             (r'<reminisce>', self._handle_reminisce),
             (r'<create\(([^,]+),\s*(.*?),\s*([^)]+)\)>', self._handle_create_work),
             (r'<get_creation_titles>', self._handle_get_creation_titles),
@@ -388,7 +399,7 @@ class ThoughtLoop:
                 
                 # Remove the command from the cleaned content
                 cleaned_content = cleaned_content.replace(command_text, "")
-        
+    
         # Trim any extra whitespace from the cleaned content
         cleaned_content = cleaned_content.strip()
         
@@ -457,29 +468,79 @@ class ThoughtLoop:
 
     def _handle_add_goal(self, args) -> str:
         """
-        Handle the <add_goal([text])> command by adding a new goal.
+        Handle the <add_goal(title, content)> command by adding a new goal.
         
         Args:
-            args: Tuple containing the goal text as the first element
+            args: Tuple containing the goal title and content
+            
+        Returns:
+            Confirmation message
+        """
+        if not args or len(args) < 2:
+            return "ERROR: Goal requires both title and content."
+        
+        title, content = args
+        title = title.strip()
+        content = content.strip()
+        
+        self.logger.info(f"Processing <add_goal> command with title: {title}")
+        
+        try:
+            # Add the goal
+            goal_id = self.add_goal(title, content)
+            
+            if not goal_id:
+                return f"ERROR: Failed to create goal '{title}'."
+            
+            return f"NEW GOAL ADDED: {title}\n{content}"
+            
+        except Exception as e:
+            self.logger.error(f"Error processing add_goal command: {str(e)}")
+            return f"ERROR: Could not add goal: {str(e)}"
+    
+    def _handle_complete_goal(self, args) -> str:
+        """
+        Handle the <complete_goal(title)> command by marking a goal as completed.
+        
+        Args:
+            args: Tuple containing the goal title
             
         Returns:
             Confirmation message
         """
         if not args or not args[0]:
-            return "ERROR: No goal text provided."
-            
-        goal_text = args[0].strip()
+            return "ERROR: No goal title provided."
         
-        self.logger.info(f"Processing <add_goal> command with goal: {goal_text}")
+        goal_title = args[0].strip()
+        
+        self.logger.info(f"Processing <complete_goal> command with title: {goal_title}")
         
         try:
-            # Add the goal with medium-high importance
-            goal_id = self.add_goal(goal_text, importance=0.75)
-            return f"NEW GOAL ADDED: {goal_text}"
+            # Find the goal by title
+            goals = self.get_goals(include_completed=False)
+            matching_goals = [g for g in goals if g['title'].lower() == goal_title.lower()]
             
+            if not matching_goals:
+                return f"ERROR: No active goal found with title '{goal_title}'."
+            
+            # Mark the goal as completed
+            goal_id = matching_goals[0]['id']
+            success = self.memory.complete_goal(goal_id)
+            
+            if not success:
+                return f"ERROR: Failed to complete goal '{goal_title}'."
+            
+            # Inject a thought about completing the goal
+            self.inject_thought(
+                f"GOAL COMPLETED: {goal_title}",
+                type="goal_completion"
+            )
+            
+            return f"GOAL COMPLETED: {goal_title}"
+        
         except Exception as e:
-            self.logger.error(f"Error processing add_goal command: {str(e)}")
-            return f"ERROR: Could not add goal: {str(e)}"
+            self.logger.error(f"Error processing complete_goal command: {str(e)}")
+            return f"ERROR: Could not complete goal: {str(e)}"
 
     def _handle_reminisce(self, args=None) -> str:
         """
