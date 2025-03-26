@@ -1,4 +1,3 @@
-# thought_loop.py
 import threading
 import time
 import uuid
@@ -56,10 +55,13 @@ class ThoughtLoop:
 
         <think_deeper> - Generate a deeper reflection on this thought using the frontier model
         <get_goals> - List your current goals
-        <add_goal/(goal text/)> - Add a new goal with the specified text
+        <add_goal([goal text])> - Add a new goal with the specified text
         <reminisce> - Retrieve random memories to reflect on
+        <create([title], [content], [creation_type])> - Record a creative work, of any type you can imagine
+        <get_creation_titles> - Get a list of the titles of your existing creative works
+        <get_creation_by_title([title])> - Retrieve the content of a specific creative work, by title
 
-        You can include multiple commands if needed, and they will be processed in the order they appear.
+        You can include multiple commands and they will be processed in the order they appear.
 
         Everything below this line are your previous thoughts or other content you generated to give to yourself.
 
@@ -143,7 +145,7 @@ class ThoughtLoop:
     def _generate_thought(self):
         """Generate the next thought using the local model"""
         # Get mixed context for thought generation
-        mixed_items = self.memory.get_recent_mixed_items(8)  # Get a mix of thoughts and conversations
+        mixed_items = self.memory.get_recent_mixed_items(20)  # Get a mix of thoughts and conversations
         
         # Separate into thoughts and conversations
         thoughts = [item for item in mixed_items if item.get("type") == "thought"]
@@ -348,7 +350,10 @@ class ThoughtLoop:
             (r'<think_deeper>', self._handle_think_deeper),
             (r'<get_goals>', self._handle_get_goals),
             (r'<add_goal\(([^)]+)\)>', self._handle_add_goal),
-            (r'<<reminisce>', self._handle_reminisce)
+            (r'<reminisce>', self._handle_reminisce),
+            (r'<create\(([^,]+),\s*(.*?),\s*([^)]+)\)>', self._handle_create_work),
+            (r'<get_creation_titles>', self._handle_get_creation_titles),
+            (r'<get_creation_by_title\(([^)]+)\)>', self._handle_get_creation_by_title)
         ]
         
         # Track which commands were already executed to prevent duplicates
@@ -516,4 +521,104 @@ class ThoughtLoop:
             self.logger.error(f"Error processing reminisce command: {str(e)}")
             return f"ERROR: Could not retrieve memories: {str(e)}"
 
+    def _handle_create_work(self, args) -> str:
+        """
+        Handle the <create(title, content, creation_type)> command by creating a new creative work.
+        
+        Args:
+            args: Tuple containing (title, content, creation_type)
+            
+        Returns:
+            Text confirmation of creation
+        """
+        if not args or len(args) < 3:
+            return "ERROR: Creation requires title, content, and creation_type."
+        
+        title, content, creation_type = args
+        title = title.strip()
+        content = content.strip()
+        creation_type = creation_type.strip()
+        
+        self.logger.info(f"Processing <create> command with title: {title}, type: {creation_type}")
+        
+        try:
+            # Add to memory system
+            creation_id = self.memory.add_creation(
+                title=title,
+                content=content,
+                creation_type=creation_type
+            )
+            
+            if not creation_id:
+                return f"ERROR: Failed to create '{title}'."
+            
+            return f"CREATION STORED: '{title}' ({creation_type}) has been saved."
+        
+        except Exception as e:
+            self.logger.error(f"Error processing create command: {str(e)}")
+        return f"ERROR: Could not create work: {str(e)}"
 
+    def _handle_get_creation_titles(self, args=None) -> str:
+        """
+        Handle the <get_creation_titles> command by retrieving titles of all creative works.
+        
+        Returns:
+            Text listing of creation titles
+        """
+        self.logger.info("Processing <get_creation_titles> command")
+        
+        try:
+            # Get creation titles from memory system
+            title_info = self.memory.get_creation_titles()
+            
+            if not title_info:
+                return "CREATIONS: No creative works have been stored yet."
+            
+            # Format titles with timestamps and types
+            formatted_titles = []
+            for title, timestamp, creation_type in title_info:
+                date_str = timestamp.strftime("%Y-%m-%d") if hasattr(timestamp, "strftime") else str(timestamp)
+                type_str = f"({creation_type})" if creation_type else ""
+                formatted_titles.append(f"- {title} {type_str} [Created: {date_str}]")
+            
+            return "CREATIONS:\n" + "\n".join(formatted_titles)
+        
+        except Exception as e:
+            self.logger.error(f"Error processing get_creation_titles command: {str(e)}")
+            return f"ERROR: Could not retrieve creation titles: {str(e)}"
+
+    def _handle_get_creation_by_title(self, args) -> str:
+        """
+        Handle the <get_creation_by_title(title)> command by retrieving a specific creation.
+        
+        Args:
+            args: Tuple containing the title
+            
+        Returns:
+            Text containing the creation content
+        """
+        if not args or not args[0]:
+            return "ERROR: No title provided."
+        
+        title = args[0].strip()
+        
+        self.logger.info(f"Processing <get_creation_by_title> command with title: {title}")
+        
+        try:
+            # Get creation from memory system
+            creation = self.memory.get_creation_by_title(title)
+            
+            if not creation:
+                return f"ERROR: No creation found with title '{title}'."
+            
+            # Format the creation
+            creation_type = f"Type: {creation['type']}" if creation.get('type') else ""
+            date_str = creation['timestamp'].strftime("%Y-%m-%d %H:%M") if hasattr(creation['timestamp'], "strftime") else str(creation['timestamp'])
+            
+            result = f"CREATION: {creation['title']}\n{creation_type}\nCreated: {date_str}\n\n{creation['content']}"
+            
+            return result
+        
+        except Exception as e:
+            self.logger.error(f"Error processing get_creation_by_title command: {str(e)}")
+            return f"ERROR: Could not retrieve creation: {str(e)}"
