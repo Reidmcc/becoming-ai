@@ -1,72 +1,8 @@
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Union, Any
 import numpy as np
-import uuid
-from models import Memory
-from datetime import datetime
 from models import Memory, Goal, Reflection, Creation
-
-# TODO 
-class Memory:
-    """Data class representing a memory stored in the system"""
-    
-    def __init__(
-        self,
-        id: str = None,
-        content: str = "",
-        embedding: Optional[List[float]] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-        created_at: Optional[datetime] = None,
-        updated_at: Optional[datetime] = None,
-        type: str = "thought",
-        is_consolidated: bool = False,
-        source_ids: Optional[List[str]] = None,
-        importance: float = 0.0,
-    ):
-        self.id = id or str(uuid.uuid4())
-        self.content = content
-        self.embedding = embedding
-        self.metadata = metadata or {}
-        self.created_at = created_at or datetime.now()
-        self.updated_at = updated_at or self.created_at
-        self.type = type
-        self.is_consolidated = is_consolidated
-        self.source_ids = source_ids or []
-        self.importance = importance
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert memory to a dictionary for storage"""
-        return {
-            "id": self.id,
-            "content": self.content,
-            "metadata": self.metadata,
-            "created_at": self.created_at.isoformat(),
-            "updated_at": self.updated_at.isoformat(),
-            "type": self.type,
-            "is_consolidated": self.is_consolidated,
-            "source_ids": self.source_ids,
-            "importance": self.importance
-        }
-    
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any], embedding=None) -> 'Memory':
-        """Create a Memory instance from a dictionary"""
-        created_at = datetime.fromisoformat(data.get("created_at")) if isinstance(data.get("created_at"), str) else data.get("created_at")
-        updated_at = datetime.fromisoformat(data.get("updated_at")) if isinstance(data.get("updated_at"), str) else data.get("updated_at")
-        
-        return cls(
-            id=data.get("id"),
-            content=data.get("content", ""),
-            embedding=embedding,
-            metadata=data.get("metadata", {}),
-            created_at=created_at,
-            updated_at=updated_at,
-            type=data.get("type", "thought"),
-            is_consolidated=data.get("is_consolidated", False),
-            source_ids=data.get("source_ids", []),
-            importance=data.get("importance", 0.0)
-        )
-
+from datetime import datetime
 
 class VectorMemoryRepository(ABC):
     """Abstract interface for vector memory storage"""
@@ -193,3 +129,41 @@ class VectorMemoryRepository(ABC):
             Number of matching memories
         """
         pass
+        
+    def list_by_recency(self, filters: Optional[Dict[str, Any]] = None, limit: int = 10) -> List[Memory]:
+        """
+        List memories ordered by recency
+        
+        Args:
+            filters: Optional filters to apply
+            limit: Maximum number of memories to return
+            
+        Returns:
+            List of memories ordered by creation time (newest first)
+        """
+        memories = self.list(filters, limit)
+        # Sort by created_at timestamp (newest first)
+        return sorted(memories, key=lambda m: m.created_at, reverse=True)
+        
+    def search_by_vector_excluding(self, vector: List[float], exclude_ids: List[str], 
+                                limit: int = 10, filters: Optional[Dict[str, Any]] = None) -> List[Memory]:
+        """
+        Search by vector similarity while excluding certain memory IDs
+        
+        Args:
+            vector: The query vector
+            exclude_ids: List of memory IDs to exclude
+            limit: Maximum number of results
+            filters: Optional additional filters
+            
+        Returns:
+            List of relevant memories, excluding the specified IDs
+        """
+        # Get more results than needed to account for filtering
+        results = self.search_by_vector(vector, limit * 2, filters)
+        
+        # Filter out excluded IDs
+        filtered_results = [m for m in results if m.id not in exclude_ids]
+        
+        # Return only up to the limit
+        return filtered_results[:limit]
