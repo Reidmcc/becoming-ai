@@ -1,12 +1,12 @@
 # memory/chroma_repository.py
 import chromadb
 from chromadb.config import Settings
-from typing import Dict, List, Optional, Union, Any
+from typing import Dict, List, Optional, Union, Any, Type
 import numpy as np
 import logging
 from datetime import datetime
-from repository import VectorMemoryRepository
-from models import Memory
+from .repository import VectorMemoryRepository
+from .models import Memory, Goal, Reflection, Creation
 
 class ChromaDBMemoryRepository(VectorMemoryRepository):
     """ChromaDB implementation of VectorMemoryRepository"""
@@ -64,6 +64,11 @@ class ChromaDBMemoryRepository(VectorMemoryRepository):
             # Remove content and ID from metadata since they're stored separately
             metadata.pop("content", None)
             metadata.pop("id", None)
+            
+            # Add memory class type to metadata for proper reconstruction
+            memory_class = self._get_memory_class_name(memory)
+            metadata["memory_class"] = memory_class
+            
             # Convert non-string/numeric values to strings to ensure ChromaDB compatibility
             for key, value in list(metadata.items()):
                 if not isinstance(value, (str, int, float, bool)) and value is not None:
@@ -108,7 +113,11 @@ class ChromaDBMemoryRepository(VectorMemoryRepository):
             if "updated_at" in metadata and isinstance(metadata["updated_at"], str):
                 metadata["updated_at"] = datetime.fromisoformat(metadata["updated_at"])
             
-            return Memory.from_dict(metadata, embedding)
+            # Create the appropriate memory subclass instance
+            memory_class = metadata.pop("memory_class", "Memory") if "memory_class" in metadata else "Memory"
+            memory = self._create_memory_instance(memory_class, metadata, embedding)
+            
+            return memory
             
         except Exception as e:
             self.logger.error(f"Error retrieving memory: {str(e)}")
@@ -128,6 +137,10 @@ class ChromaDBMemoryRepository(VectorMemoryRepository):
             metadata = memory.to_dict()
             metadata.pop("content", None)
             metadata.pop("id", None)
+            
+            # Add memory class type to metadata for proper reconstruction
+            memory_class = self._get_memory_class_name(memory)
+            metadata["memory_class"] = memory_class
             
             # Convert non-string/numeric values to strings
             for key, value in list(metadata.items()):
@@ -185,7 +198,7 @@ class ChromaDBMemoryRepository(VectorMemoryRepository):
         # Use the embedding to search
         return self.search_by_vector(embedding, limit, filters)
     
-    def search_by_vector(self, vector: List[float], limit: int = 10, filters: Optional[Dict[str, Any]] = None) -> List[Memory]:
+    def search_by_vector(self, vector: List[float], limit: int = 10, filters: Optional[Dict[str, Any]] = None, exclude_ids: Optional[List[str]] = None) -> List[Memory]:
         """Search memories by vector similarity using ChromaDB"""
         try:
             # Prepare where clause if filters are provided
@@ -221,7 +234,14 @@ class ChromaDBMemoryRepository(VectorMemoryRepository):
                     if "updated_at" in metadata and isinstance(metadata["updated_at"], str):
                         metadata["updated_at"] = datetime.fromisoformat(metadata["updated_at"])
                     
-                    memory = Memory.from_dict(metadata, embedding)
+                    # Create the appropriate memory subclass instance
+                    memory_class = metadata.pop("memory_class", "Memory") if "memory_class" in metadata else "Memory"
+                    memory = self._create_memory_instance(memory_class, metadata, embedding)
+                    
+                    # Apply exclude filter if provided
+                    if exclude_ids and memory.id in exclude_ids:
+                        continue
+                        
                     memories.append(memory)
             
             self.logger.debug(f"Search returned {len(memories)} results")
@@ -275,7 +295,9 @@ class ChromaDBMemoryRepository(VectorMemoryRepository):
                     if "updated_at" in metadata and isinstance(metadata["updated_at"], str):
                         metadata["updated_at"] = datetime.fromisoformat(metadata["updated_at"])
                     
-                    memory = Memory.from_dict(metadata, embedding)
+                    # Create the appropriate memory subclass instance
+                    memory_class = metadata.pop("memory_class", "Memory") if "memory_class" in metadata else "Memory"
+                    memory = self._create_memory_instance(memory_class, metadata, embedding)
                     memories.append(memory)
             
             self.logger.debug(f"List returned {len(memories)} memories")
@@ -337,3 +359,58 @@ class ChromaDBMemoryRepository(VectorMemoryRepository):
         except Exception as e:
             self.logger.error(f"Error in search_by_vector_excluding: {str(e)}")
             return []
+            
+    def list_by_recency(self, filters: Optional[Dict[str, Any]] = None, limit: int = 10) -> List[Memory]:
+        """
+        List memories ordered by recency
+        
+        Args:
+            filters: Optional filters to apply
+            limit: Maximum number of memories to return
+            
+        Returns:
+            List of memories ordered by creation time (newest first)
+        """
+        memories = self.list(filters, limit)
+        # Sort by created_at timestamp (newest first)
+        return sorted(memories, key=lambda m: m.created_at, reverse=True)
+    
+    def _get_memory_class_name(self, memory: Memory) -> str:
+        """
+        Get the class name of a memory object
+        
+        Args:
+            memory: Memory object
+            
+        Returns:
+            Class name as a string
+        """
+        if isinstance(memory, Goal):
+            return "Goal"
+        elif isinstance(memory, Reflection):
+            return "Reflection"
+        elif isinstance(memory, Creation):
+            return "Creation"
+        else:
+            return "Memory"
+    
+    def _create_memory_instance(self, memory_class_name: str, metadata: Dict[str, Any], embedding: Optional[List[float]]) -> Memory:
+        """
+        Create the appropriate Memory subclass instance based on the class name
+        
+        Args:
+            memory_class_name: Name of the memory class
+            metadata: Memory metadata
+            embedding: Memory embedding
+            
+        Returns:
+            Memory instance of the appropriate subclass
+        """
+        if memory_class_name == "Goal":
+            return Goal.from_dict(metadata, embedding)
+        elif memory_class_name == "Reflection":
+            return Reflection.from_dict(metadata, embedding)
+        elif memory_class_name == "Creation":
+            return Creation.from_dict(metadata, embedding)
+        else:
+            return Memory.from_dict(metadata, embedding)
