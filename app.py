@@ -2,6 +2,11 @@ import os
 import logging
 from flask import Flask, render_template, jsonify, request, redirect, url_for
 import json
+from memory.repository import ChromaDBMemoryRepository
+from memory.embedding import FrontierEmbeddingService
+from memory.manager import MemoryManager
+from model_loader import LocalModelLoader
+from frontier_client import FrontierClient
 
 # Configure logging
 logging.basicConfig(
@@ -18,8 +23,7 @@ logger = logging.getLogger("BecomingAI")
 # Import configuration utilities
 from config_utils import setup_argparse, load_config
 
-# Import memory system integration
-from memory_system_integration import initialize_memory_system
+
 
 def create_app(config=None):
     """Create and configure the Flask application"""
@@ -27,8 +31,7 @@ def create_app(config=None):
     app.secret_key = os.urandom(24)
     
     # Initialize components
-    from model_loader import LocalModelLoader
-    from frontier_client import FrontierClient
+
     from thought_loop import ThoughtLoop
     from interface import ChatInterface
     
@@ -40,11 +43,19 @@ def create_app(config=None):
     logger.info("Initializing system components...")
     
     try:
+        embedding_service = FrontierEmbeddingService(frontier_client)
+
+        memory_repository = ChromaDBMemoryRepository(
+            collection_name="ai_memories",
+            persist_directory=os.path.join(config.get("data_dir", "data"), "memory_vectors"),
+            embedding_function=embedding_service.get_embedding
+        )
+
         # Initialize memory system with chat exports if available
-        
+        # TODO this needs to be redone for the vector database memory implementation
         if config.get('load_chat_exports'):
             chat_exports_path = config.get('chat_exports_path')
-        memory_system = initialize_memory_system(config, chat_exports_path)
+        memory_system = memory_repository(config, chat_exports_path)
         logger.info("Memory system initialized")
         
         model_loader = LocalModelLoader(

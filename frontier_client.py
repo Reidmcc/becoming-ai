@@ -113,3 +113,32 @@ Respond in first person, as this is your own internal reflection. Begin with <re
         except Exception as e:
             self.logger.error(f"Error calling frontier API: {str(e)}")
             return f"<reflection>I encountered an error while trying to deepen my reflection: {str(e)}</reflection>"
+        
+
+
+    def get_embedding(self, text):
+        """
+        Generate embedding for text using the frontier model
+        
+        Args:
+            text: Text to generate embedding for
+            
+        Returns:
+            List[float]: Vector embedding
+        """
+        try:
+            # Call the appropriate API endpoint for embeddings
+            response = self.client.embeddings.create(
+                model=self.model.replace("claude", "text-embedding"),  # Use appropriate embedding model
+                input=text
+            )
+            
+            # Extract embedding from response
+            embedding = response.data[0].embedding
+            
+            self.logger.info(f"Generated embedding (dimensions: {len(embedding)})")
+            
+            return embedding
+        except Exception as e:
+            self.logger.error(f"Error generating embedding: {str(e)}")
+            raise

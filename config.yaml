@@ -1,42 +1,59 @@
-# Becoming AI Configuration
+# System configuration
+system:
+  debug: false
+  frontier_only: false
+  data_dir: "data"
+  log_dir: "logs"
+
+# Server configuration
+server:
+  host: "0.0.0.0"  # Listen on all interfaces
+  port: 5000
 
 # Model configuration
-# Local model for thought generation
-local_model: "deepseek-ai/deepseek-R1-Distill-Llama-8B"
-# Quantization level (int8, int4, or fp16)
-quantization: "int8"
-# Cache directory for downloaded models (optional)
-cache_dir: "models/cache"
-
-# Frontier model for deeper reflections and chat
-frontier_model: "claude-3-7-sonnet-20250219"
-# Maximum API calls per day to manage costs
-max_daily_calls: 100
+models:
+  # Local model for thought generation
+  local:
+    name: "deepseek-ai/deepseek-R1-Distill-Llama-8B"
+    quantization: "int8"
+    cache_dir: "models/cache"
+  
+  # Frontier model for deeper reflections and chat
+  frontier:
+    name: "claude-3-7-sonnet-20250219"
+    max_daily_calls: 100
 
 # Thought process configuration
-# Interval between thoughts in seconds
-thought_interval: 60.0
+thought_loop:
+  interval: 60.0  # seconds
+  max_length: 1000
 
 # Memory configuration
-# Whether to use a remote database instead of local SQLite
-use_remote_db: false
-# Path to SQLite database (if using local DB)
-local_db_path: "data/memories.db"
-# Path for vector save/load
-vector_store_path: "data/vectors.pkl"
+memory:
+  # Vector database configuration
+  vector_db:
+    type: "chroma"
+    collection_name: "ai_memories"
+    persist_directory: "data/memory_vectors"
   
-# Remote database settings (only used if use_remote_db is true)
-remote_db_host: "localhost"
-remote_db_port: 3306
-remote_db_user: "becoming_ai"
-remote_db_password: ""
-
-# Web server configuration
-# Host to bind the web server
-server_host: "0.0.0.0"
-# Port for the web server
-server_port: 5000
+  # Embedding configuration
+  embedding:
+    provider: "sentence-transformers"
+    model: "sentence-transformers/all-mpnet-base-v2"
+  
+  # Embedding cache settings
+  cache:
+    directory: "data/embedding_cache"
+    max_size: 10000  # Maximum in-memory cache entries
+    expiry_days: 90  # How long to keep cached embeddings
+  
+  # Consolidation configuration
+  consolidation:
+    interval: 86400  # Seconds between consolidation (24 hours)
+    min_cluster_size: 3  # Minimum memories to form a cluster
+    similarity_threshold: 0.75  # Threshold for clustering
 
 # Additional settings
-load_chat_exports: True
-chat_exports_path: "data/chat_exports.json"
+import:
+  load_chat_exports: false
+  chat_exports_path: "data/chat_exports.json"

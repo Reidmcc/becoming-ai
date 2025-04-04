@@ -3,6 +3,13 @@ import logging
 import argparse
 import time
 from typing import Dict, Any
+from config_utils import setup_argparse, load_config, get_flattened_config
+from model_loader import LocalModelLoader
+from frontier_client import FrontierClient
+from thought_loop import ThoughtLoop
+from memory.repository import ChromaDBMemoryRepository
+from memory.embedding import FrontierEmbeddingService
+from memory.manager import MemoryManager
 
 # Configure logging
 logging.basicConfig(
@@ -17,12 +24,7 @@ logging.basicConfig(
 logger = logging.getLogger("BecomingAI")
 
 # Import custom modules
-from config_utils import setup_argparse, load_config, get_flattened_config
-from model_loader import LocalModelLoader
-from memory_system_integration import initialize_memory_system
-from frontier_client import FrontierClient
-from thought_loop import ThoughtLoop
-from memory_consolidator import MemoryConsolidator
+
 
 def main():
     """Main entry point for the Becoming AI system"""
@@ -56,10 +58,19 @@ def main():
         if not flat_config.get('use_remote_db', False):
             os.makedirs(os.path.dirname(os.path.abspath(flat_config.get('db_path', 'data/memories.db'))), exist_ok=True)
         
-        # Initialize memory system with chat exports
-        logger.info("Initializing memory system...")
-        chat_exports_path = flat_config.get('chat_exports_path', 'data/chat_exports.json')
-        memory_system = initialize_memory_system(flat_config, chat_exports_path)
+        frontier_client = FrontierClient(
+        api_key=os.environ.get("ANTHROPIC_API_KEY"),
+        model=config.get("frontier_model", "claude-3-7-sonnet-latest"),
+        max_daily_calls=config.get("max_daily_calls", 100)
+    )
+
+        embedding_service = FrontierEmbeddingService(frontier_client)
+
+        memory_repository = ChromaDBMemoryRepository(
+            collection_name="ai_memories",
+            persist_directory=os.path.join(config.get("data_dir", "data"), "memory_vectors"),
+            embedding_function=embedding_service.get_embedding
+        )
         
         # Initialize model loader
         logger.info("Initializing model loader...")
@@ -67,44 +78,19 @@ def main():
             model_name=flat_config["model_name"],
             quantization=flat_config["quantization"]
         )
-        
-        # Initialize frontier client
-        logger.info("Initializing frontier client...")
-        frontier_client = FrontierClient(
-            api_key=os.environ.get("ANTHROPIC_API_KEY"),
-            model=flat_config["frontier_model"],
-            max_daily_calls=flat_config["max_daily_calls"]
-        )
-        
+
         # Initialize thought loop
         logger.info("Initializing thought loop...")
         thought_loop = ThoughtLoop(
             model_loader=model_loader,
-            memory_system=memory_system,
+            memory_system=memory_repository,
             frontier_client=frontier_client,
             config=flat_config
-        )
-        
-        # Initialize memory consolidator
-        logger.info("Initializing memory consolidator...")
-        memory_consolidator = MemoryConsolidator(
-            memory_system=memory_system,
-            config={
-                'memory_threshold': flat_config.get("memory_threshold", 250),
-                'consolidation_interval': flat_config.get("consolidation_interval", 3600),
-                'similarity_threshold': flat_config.get("similarity_threshold", 0.75),
-                'min_cluster_size': flat_config.get("min_cluster_size", 3),
-                'max_clusters_per_consolidation': flat_config.get("max_clusters_per_consolidation", 5)
-            }
         )
         
         # Start the thought loop
         logger.info("Starting thought loop...")
         thought_loop.start()
-        
-        # Start the memory consolidator
-        logger.info("Starting memory consolidator...")
-        memory_consolidator.start()
         
         # Keep the main thread running
         logger.info("Becoming AI system running in headless mode. Press Ctrl+C to exit.")
@@ -112,25 +98,12 @@ def main():
             # Block main thread until interrupted
             while True:
                 # Log system status periodically
-                memory_count = len(memory_system._get_all_memories())
-                thought_count = thought_loop.thought_count
-                time_since_last = (time.time() - memory_consolidator.last_consolidation.timestamp()) / 60
-                next_consolidation = max(0, memory_consolidator.consolidation_interval / 60 - time_since_last)
-                
-                logger.info(
-                    f"Status: Thoughts={thought_count}, Memories={memory_count}, "
-                    f"Next consolidation in {next_consolidation:.1f} minutes"
-                )
-                if hasattr(memory_system, "save_vector_store") and thought_count % 6 == 0:
-                    logger.info("Performing periodic vector store backup...")
-                    memory_system.save_vector_store()
-                
+                thought_count = thought_loop.thought_count             
                 time.sleep(300)  # Status update every 5 minutes
                 
         except KeyboardInterrupt:
             logger.info("Received interrupt signal. Shutting down...")
             thought_loop.stop()
-            memory_consolidator.stop()
             model_loader.unload_model()
             logger.info("Shutdown complete.")
     

@@ -98,14 +98,13 @@ class LocalModelLoader:
             self.logger.error(f"Error loading model: {str(e)}")
             return False
     
-    def generate_thought(self, prompt, max_length=200, temperature=0.7, top_p=0.9):
+    def generate_thought(self, prompt, max_length=1000, temperature=0.7):
         """Generate a thought using the local model
         
         Args:
             prompt: Text prompt to generate from
             max_length: Maximum number of new tokens
             temperature: Sampling temperature
-            top_p: Top-p sampling parameter
             
         Returns:
             Generated text
@@ -131,7 +130,6 @@ class LocalModelLoader:
                     attention_mask=attention_mask,
                     max_new_tokens=max_length,
                     temperature=temperature,
-                    top_p=top_p,
                     do_sample=True,
                     pad_token_id=self.tokenizer.pad_token_id
                 )

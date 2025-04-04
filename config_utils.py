@@ -1,9 +1,9 @@
-# config_utils.py
 import os
 import yaml
+import json
 import logging
 import argparse
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 # Configure logging
 logger = logging.getLogger("ConfigUtils")
@@ -21,29 +21,22 @@ def setup_argparse() -> argparse.ArgumentParser:
     parser.add_argument("--config", "-c", help="Path to configuration file (YAML or JSON)")
     parser.add_argument("--chat-exports", help="Path to chat exports JSON file")
     
+    # Top-level options
+    parser.add_argument("--frontier-only", action="store_true", help="Use frontier model for all operations")
+    parser.add_argument("--debug", action="store_true", help="Run in debug mode")
+    
     # Model options
     parser.add_argument("--local-model", help="Model to use for thought generation")
     parser.add_argument("--quantization", choices=["int8", "int4", "fp16"], help="Quantization level for model")
     parser.add_argument("--frontier-model", help="Frontier model to use for reflections")
     
-    # Thought process options
-    parser.add_argument("--thought-interval", type=float, help="Interval between thoughts in seconds")
-    parser.add_argument("--max-daily-calls", type=int, help="Maximum API calls to frontier model per day")
-    
     # Memory options
-    parser.add_argument("--use-remote-db", action="store_true",help="Use remote database instead of local SQLite")
-    parser.add_argument("--remote-db-host", help="Remote database host (if using remote DB)")
-    parser.add_argument("--remote-db-port", type=int, help="Remote database port (if using remote DB)")
-    parser.add_argument("--remote-db-name", help="Remote database name (if using remote DB)")
-    parser.add_argument("--remote-db-user", help="Remote database user (if using remote DB)")
-    parser.add_argument("--remote-db-password", help="Remote database password (if using remote DB)")
-    parser.add_argument("--remote-db-path", help="Path to SQLite database file (if using local DB)")
-    parser.add_argument("--vector-store-path", help="Path to store vector embeddings")
+    parser.add_argument("--memory-db", help="Type of vector database to use (chroma, pinecone, etc.)")
+    parser.add_argument("--memory-dir", help="Directory for memory storage")
     
-    # Web server options
-    parser.add_argument("--host",help="Host to run the web server on")
+    # Server options
+    parser.add_argument("--host", help="Host to run the web server on")
     parser.add_argument("--port", type=int, help="Port to run the web server on")
-    parser.add_argument("--debug", action="store_true", help="Run in debug mode")
     
     return parser
 
@@ -55,41 +48,80 @@ def get_default_config() -> Dict[str, Any]:
         Dict containing default configuration values
     """
     return {
-        # Model configuration
-        "model_name": "deepseek-ai/deepseek-R1-Distill-Llama-8B",
-        "quantization": "int8",
-        # "cache_dir": "models/cache",
+        # System configuration
+        "system": {
+            "debug": False,
+            "frontier_only": False,
+            "data_dir": "data",
+            "log_dir": "logs",
+        },
         
-        # Frontier model configuration
-        "frontier_model": "claude-3-7-sonnet-20250219",
-        "max_daily_calls": 100,
+        # Server configuration
+        "server": {
+            "host": "127.0.0.1",
+            "port": 5000,
+        },
+        
+        # Model configuration
+        "models": {
+            # Local model for thought generation
+            "local": {
+                "name": "deepseek-ai/deepseek-R1-Distill-Llama-8B",
+                "quantization": "int8",
+                "cache_dir": "models/cache",
+            },
+            
+            # Frontier model for deeper reflections and chat
+            "frontier": {
+                "name": "claude-3-7-sonnet-20250219",
+                "max_daily_calls": 100,
+            }
+        },
         
         # Thought process configuration
-        "thought_interval": 60.0,  # seconds
-        "max_thought_length": 500,
+        "thought_loop": {
+            "interval": 60.0,  # seconds
+            "max_length": 500,
+        },
         
         # Memory configuration
-        "use_remote_db": False,
-        "db_path": "data/memories.db",
-        "vector_store_path": "data/vectors.pkl",
-        
-        # Remote database settings (only used if use_remote_db is True)
-        "remote_db_host": "localhost",
-        "remote_db_port": 3306,
-        "remote_db_name": "becoming_ai",
-        "remote_db_user": "becoming_ai",
-        "remote_db_password": "",
-        
-        # Web server configuration
-        "server_host": "127.0.0.1",
-        "server_port": 5000,
+        "memory": {
+            # Vector database configuration
+            "vector_db": {
+                "type": "chroma",
+                "collection_name": "ai_memories",
+                "persist_directory": "data/memory_vectors",
+            },
+            
+            # Embedding configuration
+            "embedding": {
+                "provider": "sentence-transformers",
+                "model": "sentence-transformers/all-mpnet-base-v2",
+            },
+            
+            # Embedding cache settings
+            "cache": {
+                "directory": "data/embedding_cache",
+                "max_size": 10000,  # Maximum in-memory cache entries
+                "expiry_days": 90,  # How long to keep cached embeddings
+            },
+            
+            # Consolidation configuration
+            "consolidation": {
+                "interval": 86400,  # Seconds between consolidation (24 hours)
+                "min_cluster_size": 3,  # Minimum memories to form a cluster
+                "similarity_threshold": 0.75,  # Threshold for clustering
+            }
+        },
         
         # Additional settings
-        "load_chat_exports": False,
-        "chat_exports_path": "data/chat_exports.json"
+        "import": {
+            "load_chat_exports": False,
+            "chat_exports_path": "data/chat_exports.json",
+        }
     }
 
-def load_config_file(config: str) -> Dict[str, Any]:
+def load_config_file(config_path: str) -> Dict[str, Any]:
     """
     Load configuration from a file.
     
@@ -99,26 +131,228 @@ def load_config_file(config: str) -> Dict[str, Any]:
     Returns:
         Dict containing configuration values
     """
-    if not os.path.exists(config):
-        logger.warning(f"Configuration file not found: {config}")
+    if not config_path or not os.path.exists(config_path):
+        if config_path:
+            logger.warning(f"Configuration file not found: {config_path}")
         return {}
     
     try:
-        with open(config, 'r') as f:
-            config = yaml.safe_load(f)
-        logger.info(f"Loaded configuration from {config}")
+        extension = os.path.splitext(config_path)[1].lower()
+        
+        with open(config_path, 'r') as f:
+            if extension in ['.yaml', '.yml']:
+                config = yaml.safe_load(f)
+            elif extension == '.json':
+                config = json.load(f)
+            else:
+                logger.warning(f"Unknown config file format: {extension}, assuming YAML")
+                config = yaml.safe_load(f)
+                
+        logger.info(f"Loaded configuration from {config_path}")
         return config
     except Exception as e:
         logger.error(f"Error loading configuration file: {str(e)}")
         return {}
 
-def load_config(config_path, cli_args: Optional[argparse.Namespace] = None) -> Dict[str, Any]:
+def flatten_dict(d: Dict[str, Any], parent_key: str = '', sep: str = '_') -> Dict[str, Any]:
+    """
+    Flatten a nested dictionary.
+    
+    Args:
+        d: Dictionary to flatten
+        parent_key: Key of parent dictionary (for recursion)
+        sep: Separator character for keys
+        
+    Returns:
+        Flattened dictionary
+    """
+    items = []
+    for k, v in d.items():
+        new_key = f"{parent_key}{sep}{k}" if parent_key else k
+        
+        if isinstance(v, dict):
+            items.extend(flatten_dict(v, new_key, sep).items())
+        else:
+            items.append((new_key, v))
+            
+    return dict(items)
+
+def update_dict_recursively(target: Dict[str, Any], source: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Update a target dictionary with values from a source dictionary, recursively.
+    
+    Args:
+        target: Target dictionary to update
+        source: Source dictionary with new values
+        
+    Returns:
+        Updated dictionary
+    """
+    for key, value in source.items():
+        if key in target and isinstance(target[key], dict) and isinstance(value, dict):
+            # Recursively update nested dictionaries
+            target[key] = update_dict_recursively(target[key], value)
+        else:
+            # Update or add the value
+            target[key] = value
+            
+    return target
+
+def apply_cli_args_to_config(config: Dict[str, Any], args: argparse.Namespace) -> Dict[str, Any]:
+    """
+    Apply command-line arguments to configuration.
+    
+    Args:
+        config: Current configuration dictionary
+        args: Parsed command-line arguments
+        
+    Returns:
+        Updated configuration dictionary
+    """
+    args_dict = vars(args)
+    
+    # Apply top-level arguments
+    if args.debug is not None:
+        config['system']['debug'] = args.debug
+        
+    if args.frontier_only is not None:
+        config['system']['frontier_only'] = args.frontier_only
+        
+    if args.chat_exports:
+        config['import']['chat_exports_path'] = args.chat_exports
+        config['import']['load_chat_exports'] = True
+    
+    # Apply model arguments
+    if args.local_model:
+        config['models']['local']['name'] = args.local_model
+        
+    if args.quantization:
+        config['models']['local']['quantization'] = args.quantization
+        
+    if args.frontier_model:
+        config['models']['frontier']['name'] = args.frontier_model
+    
+    # Apply memory arguments
+    if args.memory_db:
+        config['memory']['vector_db']['type'] = args.memory_db
+        
+    if args.memory_dir:
+        # Update all memory-related directories
+        memory_dir = args.memory_dir
+        config['memory']['vector_db']['persist_directory'] = os.path.join(memory_dir, 'vectors')
+        config['memory']['cache']['directory'] = os.path.join(memory_dir, 'cache')
+    
+    # Apply server arguments
+    if args.host:
+        config['server']['host'] = args.host
+        
+    if args.port:
+        config['server']['port'] = args.port
+    
+    return config
+
+def get_flattened_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Get a flattened version of the configuration for backward compatibility.
+    
+    Args:
+        config: Nested configuration dictionary
+        
+    Returns:
+        Flattened configuration dictionary
+    """
+    return flatten_dict(config)
+
+def resolve_paths(config: Dict[str, Any], base_dir: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Resolve relative paths in configuration.
+    
+    Args:
+        config: Configuration dictionary
+        base_dir: Base directory for relative paths (defaults to current directory)
+        
+    Returns:
+        Configuration with resolved paths
+    """
+    # Define paths to resolve
+    path_keys = [
+        ('system', 'data_dir'),
+        ('system', 'log_dir'),
+        ('models', 'local', 'cache_dir'),
+        ('memory', 'vector_db', 'persist_directory'),
+        ('memory', 'cache', 'directory'),
+        ('import', 'chat_exports_path'),
+    ]
+    
+    # Create a deep copy to avoid modifying the original
+    result = config.copy()
+    
+    for path_key in path_keys:
+        # Navigate to the nested key
+        current = result
+        for i, key in enumerate(path_key):
+            if i == len(path_key) - 1:
+                # Last key - this is the path to resolve
+                path = current.get(key)
+                if path and not os.path.isabs(path) and base_dir:
+                    current[key] = os.path.join(base_dir, path)
+            else:
+                # Navigate to next level
+                if key in current and isinstance(current[key], dict):
+                    current = current[key]
+                else:
+                    # Key doesn't exist or isn't a dict, skip this path
+                    break
+    
+    return result
+
+def ensure_directories(config: Dict[str, Any]) -> None:
+    """
+    Ensure all required directories exist.
+    
+    Args:
+        config: Configuration dictionary with resolved paths
+    """
+    # Define directories to ensure
+    dir_keys = [
+        ('system', 'data_dir'),
+        ('system', 'log_dir'),
+        ('models', 'local', 'cache_dir'),
+        ('memory', 'vector_db', 'persist_directory'),
+        ('memory', 'cache', 'directory'),
+    ]
+    
+    for dir_key in dir_keys:
+        # Navigate to the nested key
+        current = config
+        valid_path = True
+        
+        for i, key in enumerate(dir_key):
+            if i == len(dir_key) - 1:
+                # Last key - this is the directory to ensure
+                dir_path = current.get(key)
+                if dir_path:
+                    os.makedirs(dir_path, exist_ok=True)
+                    logger.debug(f"Ensured directory exists: {dir_path}")
+            else:
+                # Navigate to next level
+                if key in current and isinstance(current[key], dict):
+                    current = current[key]
+                else:
+                    # Key doesn't exist or isn't a dict, skip this path
+                    valid_path = False
+                    break
+        
+        if not valid_path:
+            continue
+
+def load_config(config_path: Optional[str] = None, args: Optional[argparse.Namespace] = None) -> Dict[str, Any]:
     """
     Load configuration from defaults, file, and CLI arguments.
     
     Args:
         config_path: Path to configuration file (optional)
-        cli_args: Parsed command-line arguments (optional)
+        args: Parsed command-line arguments (optional)
         
     Returns:
         Dict containing merged configuration
@@ -127,30 +361,18 @@ def load_config(config_path, cli_args: Optional[argparse.Namespace] = None) -> D
     config = get_default_config()
     
     # Load configuration from file if provided
-    if config:
+    if config_path:
         file_config = load_config_file(config_path)
-        # Update config with file values (that aren't None)
-        for key, value in file_config.items():
-            if value is not None:
-                config[key] = value
+        config = update_dict_recursively(config, file_config)
     
-    # Update with CLI arguments if provided
-    if cli_args:
-        args_dict = vars(cli_args)
-        # Only update with non-None values
-        for key, value in args_dict.items():
-            if value is not None:
-                # Convert hyphen to underscore
-                config_key = key.replace('-', '_')
-                config[config_key] = value
+    # Apply CLI arguments if provided
+    if args:
+        config = apply_cli_args_to_config(config, args)
     
-    # Validate critical values
-    if not config.get('db_path'):
-        config['db_path'] = 'data/memories.db'
-        logger.warning("Using default database path: data/memories.db")
+    # Resolve paths
+    config = resolve_paths(config)
     
-    if not config.get('vector_store_path'):
-        config['vector_store_path'] = 'data/vectors.pkl'
-        logger.warning("Using default vector store path: data/vectors.pkl")
+    # Ensure directories exist
+    ensure_directories(config)
     
     return config

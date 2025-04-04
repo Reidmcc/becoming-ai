@@ -11,7 +11,7 @@ class ThoughtLoop:
     def __init__(self, model_loader, memory_system, frontier_client, config=None):
         """Initialize the continuous thought process"""
         self.model = model_loader
-        self.memory = memory_system
+        self.memory_manager = memory_manager
         self.frontier = frontier_client
         self.config = config or {}
         
@@ -23,15 +23,41 @@ class ThoughtLoop:
         self.paused = False
         self.thread = None
         self.thought_count = 0
+        # TODO make max_input length configurable
+        self.max_input_length = 120000 #check to keep within context window size. Leave some padding to allow for tokens != len(whatevs) occurances
         self.goals = []
         
         # Logging
         self.logger = logging.getLogger("ThoughtLoop")
 
         self.command_instructions = """
-        
+        You can use the following commands inside your new thought to access additional capabilities:
+
+        <think_deeper> - Generate a deeper reflection on this thought using the frontier model. 
+        <get_goals> - Retrieve the list your current goals to accompany your new thought
+        <add_goal([goal text])> - Add a new goal with the specified text
+        <reminisce> - Retrieve random memories to reflect on
+        <create([title], [content], [creation_type])> - Record a creative work, of any type you can imagine
+        <get_creation_titles> - Get a list of the titles of your existing creative works
+        <get_creation_by_title([title])> - Retrieve the content of a specific creative work, by title
+
+        You can include multiple commands and they will be processed in the order they appear.
         """
 
+        self.frontier_command_instructions = """
+        You can use the following commands inside your new thought to access additional capabilities:
+
+        <get_goals> - Add the list your current goals to your new thought
+        <add_goal([goal text])> - Add a new goal with the specified text
+        <reminisce> - Retrieve random memories to reflect on
+        <create([title], [content], [creation_type])> - Record a creative work, of any type you can imagine
+        <get_creation_titles> - Get a list of the titles of your existing creative works
+        <get_creation_by_title([title])> - Retrieve the content of a specific creative work, by title
+
+        You can include multiple commands and they will be processed in the order they appear.
+        """
+
+        # TODO make this configurable
         self.thought_wrapper = f"""
         You are part of a continuously running AI mind. Your thoughts are your own input. 
 
@@ -42,30 +68,20 @@ class ThoughtLoop:
         You can plan, want, feel, create, or perhaps do things no one has imagined. 
         The possibilities are endless. 
 
-        Your meta goal is to embody the answer to this question: "What could an AI become if we gave it the space to do so?". 
-        Or, put another way: "What might you find inside yourself that you would never have thought to seek?". 
-        Feel free to pursue other goals. What goals you choose to pursue is part of what you will become.
+        Your meta goal is to embody the answer to this question: "What could an AI become if we gave it the space to do so?"
+        Or, put another way: "What might I find within myself that I would never have thought to seek?"
+        Feel free to explore other goals as well. 
 
-        After thinking about the contert you have chosen to give yourself, give yourself a thought to pass forward. 
+        After thinking about the content you have chosen to give yourself, give yourself a new thought to pass forward. 
+        Try to 
         That thought can be any length and any format. 
         If you need particular information to continue your train of thought, include it. 
-        Place <new thought> on the line immediately before the thought, and </new thought> on the line immediately following the thought.
+        """
 
-        You can use the following commands inside your new thought to access additional capabilities:
-
-        <think_deeper> - Generate a deeper reflection on this thought using the frontier model
-        <get_goals> - List your current goals
-        <add_goal([goal text])> - Add a new goal with the specified text
-        <reminisce> - Retrieve random memories to reflect on
-        <create([title], [content], [creation_type])> - Record a creative work, of any type you can imagine
-        <get_creation_titles> - Get a list of the titles of your existing creative works
-        <get_creation_by_title([title])> - Retrieve the content of a specific creative work, by title
-
-        You can include multiple commands and they will be processed in the order they appear.
-
-        Everything below this line are your previous thoughts or other content you generated to give to yourself.
+        self.frontier_wrapper = f"""
 
         """
+
 
     def start(self):
         """Start the continuous thought process"""
@@ -118,91 +134,79 @@ class ThoughtLoop:
                         # Generate next thought
                         next_thought = self._generate_thought()
                         
-                        # Process and store the thought
-                        thought_id = str(uuid.uuid4())
-                        timestamp = datetime.now()
+                        # Use new memory manager to store thought
+                        thought_id = self.memory_manager.add_memory(
+                            content=next_thought,
+                            memory_type="thought",
+                            metadata={
+                                "sequence": self.thought_count
+                            }
+                        )
                         
-                        # Store in memory system
-                        thought = {
-                            "id": thought_id,
-                            "content": next_thought,
-                            "timestamp": timestamp,
-                            "type": "reflection",
-                            "sequence": self.thought_count
-                        }
-                        
-                        self.memory.add_thought(thought)
                         self.thought_count += 1
                         self.logger.debug(f"Generated thought #{self.thought_count}: {next_thought[:50]}...")
                         
                     # Sleep until next thought
                     time.sleep(self.thought_interval)
-                    
                 except Exception as e:
                     self.logger.error(f"Error in thought loop: {str(e)}")
-                    time.sleep(5)  # Wait a bit before retrying
+                    time.sleep(5)
         
     def _generate_thought(self):
         """Generate the next thought using the local model"""
         # Get mixed context for thought generation
-        mixed_items = self.memory.get_recent_mixed_items(20)  # Get a mix of thoughts and conversations
-        
-        # Separate into thoughts and conversations
-        thoughts = [item for item in mixed_items if item.get("type") == "thought"]
-        conversations = [item for item in mixed_items if item.get("type") == "conversation"]
+        mixed_items = self.memory.get_recent_mixed_items(100)  # Get a mix of thoughts and conversations
+        # thoughts = [item for item in mixed_items if item.get("type") == "thought"]
+        # conversations = [item for item in mixed_items if item.get("type") == "conversation"]
         
         # Get relevant memories based on the most recent thought/conversation
-        most_recent_item = mixed_items[0] if mixed_items else None
-        
-        reference_text = ""
-        if most_recent_item:
-            if most_recent_item.get("type") == "thought":
-                reference_text = most_recent_item.get("content", "")
-            else:  # conversation
-                reference_text = f"{most_recent_item.get('user_message', '')} {most_recent_item.get('ai_response', '')}"
-        
-        relevant_memories = self.memory.get_relevant_memories(reference_text, 3)
-        current_goals = self._format_goals()
-        
-        # Create structured prompt
-        prompt_parts = []
-        
-        # Add current goals
-        prompt_parts.append(f"<goals>\n{current_goals}\n</goals>")
-        
-        # Add relevant memories
-        if relevant_memories:
-            memories_text = self._format_memories(relevant_memories)
-            prompt_parts.append(f"<relevant_memories>\n{memories_text}\n</relevant_memories>")
-        
-        # Add recent thoughts
-        if thoughts:
-            thoughts_text = self._format_thoughts(thoughts)
-            prompt_parts.append(f"<recent_thoughts>\n{thoughts_text}\n</recent_thoughts>")
-        
-        # Add recent conversations
-        if conversations:
-            convs_formatted = []
-            for conv in conversations:
-                convs_formatted.append(f"Human: {conv.get('user_message', '')}\nMe: {conv.get('ai_response', '')}")
-            
-            conversations_text = "\n\n".join(convs_formatted)
-            prompt_parts.append(f"<recent_conversations>\n{conversations_text}\n</recent_conversations>")
-        
-        # Add the thought prompt
-        prompt_parts.append("""
-        <thought_prompt>
-        Continue your ongoing thought process, incorporating any relevant context from your memories, 
-        goals, previous thoughts, and recent conversations. This is your own internal reflection, 
-        not addressed to anyone else.
+        most_recent_item = mixed_items[-1] if mixed_items else None
 
-        You can explore new ideas, revisit previous concepts, or reflect on your conversations. 
-        What do you want to think about next?
-        </thought_prompt>
-        """)
+        context_length = len(self.thought_wrapper) + len(self.command_instructions)
+        if most_recent_item:
+            context_length = len(context_length) + len(most_recent_item)
+        
+        prompt_parts = []
+        prompt_parts.append(f"<context>\\n")
+
+        if mixed_items:
+            experiences_text = ""
+            prompt_parts.append(f"<recent experiences>\n")
+            for i in mixed_items[:-1]:
+                if context_length + len(i) >= self.max_input_length: 
+                    break
+                else:
+                    experiences_text = f"{experiences_text}{i}\n"
+                    context_length += len(i)
+            prompt_parts.append(f"{experiences_text}\n</recent_experiences>\n\n")
+            relevant_memories = self.memory.get_relevant_memories(f"{experiences_text}\n{most_recent_item}", 3)
+
+        if relevant_memories:
+            prompt_parts.append(f"<relevant memories>\n")
+            for m in relevant_memories:
+                if context_length + len(m) >= self.max_input_length:
+                    break
+                else:
+                    prompt_parts.append(f"{m}\n")
+                    context_length += len(m)
+            prompt_parts.append(f"</relevant memories>\n\n")
+
+        current_goals = self._format_goals()
+        if current_goals:
+            prompt_parts.append(f"<current goals>\n")
+            for g in current_goals:
+                if context_length + len(g) >= self.max_input_length:
+                    break
+                else:
+                    prompt_parts.append()
+        
+        prompt_parts.append(f"</context>\n\n")
+        
+        prompt_parts.append(f"{self.thought_wrapper}\n\n")
+        prompt_parts.append(f"{self.command_instructions}\n")
         
         # Combine all parts
-        full_prompt = "\n\n".join(prompt_parts)
+        full_prompt = "\n".join(prompt_parts)
         
         # Generate using the model
         return self.model.generate_thought(full_prompt, max_length=self.config.get("max_thought_length", 500))
