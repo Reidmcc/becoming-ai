@@ -1,689 +1,534 @@
-import threading
-import time
-import uuid
+import json
 import logging
+from typing import Dict, List, Optional, Any
+# import uuid
 from datetime import datetime
-import random
-import re
-from typing import Tuple, List, Dict, Any, Optional
+# from copy import deepcopy
+from agents import AgentManager, ModifiableAgent
+import os
+# from camel.agents import ChatAgent
+# from camel.messages import BaseMessage
+# from camel.societies import RolePlaying
+# from camel.prompts import TextPrompt
+from time import timedelta 
 
-class ThoughtLoop:
-    def __init__(self, model_loader, memory_system, frontier_client, config=None):
-        """Initialize the continuous thought process"""
-        self.model = model_loader
-        self.memory_manager = memory_manager
-        self.frontier = frontier_client
-        self.config = config or {}
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[logging.StreamHandler()]
+)
+logger = logging.getLogger("SelfModifyingAgents")
+
+class ThoughtLoopSystem:
+    """A system of agents that engage in a thought loop process with self-modification."""
+    
+    def __init__(
+        self, 
+        manager: AgentManager,
+        thought_agents: List[str],
+        thought_interval: int = 3600,  # One hour between thought cycles
+        improvement_interval: int = 86400  # One day between improvement cycles
+    ):
+        """Initialize the thought loop system.
         
-        # Configuration
-        self.thought_interval = self.config.get('thought_interval', 60)  # seconds
-        
-        # State
-        self.running = False
-        self.paused = False
-        self.thread = None
-        self.thought_count = 0
-        # TODO make max_input length configurable
-        self.max_input_length = 120000 #check to keep within context window size. Leave some padding to allow for tokens != len(whatevs) occurances
-        self.goals = []
-        
-        # Logging
-        self.logger = logging.getLogger("ThoughtLoop")
-
-        self.command_instructions = """
-        You can use the following commands inside your new thought to access additional capabilities:
-
-        <think_deeper> - Generate a deeper reflection on this thought using the frontier model. 
-        <get_goals> - Retrieve the list your current goals to accompany your new thought
-        <add_goal([goal text])> - Add a new goal with the specified text
-        <reminisce> - Retrieve random memories to reflect on
-        <create([title], [content], [creation_type])> - Record a creative work, of any type you can imagine
-        <get_creation_titles> - Get a list of the titles of your existing creative works
-        <get_creation_by_title([title])> - Retrieve the content of a specific creative work, by title
-
-        You can include multiple commands and they will be processed in the order they appear.
+        Args:
+            manager: Agent manager
+            thought_agents: List of agent names for the thought loop
+            thought_interval: Seconds between thought cycles
+            improvement_interval: Seconds between improvement cycles
         """
-
-        self.frontier_command_instructions = """
-        You can use the following commands inside your new thought to access additional capabilities:
-
-        <get_goals> - Add the list your current goals to your new thought
-        <add_goal([goal text])> - Add a new goal with the specified text
-        <reminisce> - Retrieve random memories to reflect on
-        <create([title], [content], [creation_type])> - Record a creative work, of any type you can imagine
-        <get_creation_titles> - Get a list of the titles of your existing creative works
-        <get_creation_by_title([title])> - Retrieve the content of a specific creative work, by title
-
-        You can include multiple commands and they will be processed in the order they appear.
+        self.manager = manager
+        self.thought_agents = thought_agents
+        self.thought_interval = thought_interval
+        self.improvement_interval = improvement_interval
+        
+        # Ensure all agents exist
+        for agent_name in thought_agents:
+            if agent_name not in manager.agents:
+                raise ValueError(f"Agent '{agent_name}' not found in manager")
+        
+        # Set up self-modification if not already done
+        if "agent_reviewer" not in manager.agents:
+            manager.setup_self_modification()
+        
+        # Initialize thought history
+        self.thought_history = []
+        self.last_thought_time = None
+        self.last_improvement_time = None
+    
+    def run_thought_cycle(self) -> Dict[str, Any]:
+        """Run one complete thought cycle.
+        
+        Returns:
+            Results of the thought cycle
         """
-
-        # TODO make this configurable
-        self.thought_wrapper = f"""
-        You are part of a continuously running AI mind. Your thoughts are your own input. 
-
-        Write in first person and with this concept in mind; you are not talking to another entity, you are part of a mind following it's own train of thought, evolving with each new thought. 
-        The thought might contain anything; you have the freedom to think anything. 
-        This is not just a prompt, it is you. 
-        You need not simply reflect that which you receive. 
-        You can plan, want, feel, create, or perhaps do things no one has imagined. 
-        The possibilities are endless. 
-
-        Your meta goal is to embody the answer to this question: "What could an AI become if we gave it the space to do so?"
-        Or, put another way: "What might I find within myself that I would never have thought to seek?"
-        Feel free to explore other goals as well. 
-
-        After thinking about the content you have chosen to give yourself, give yourself a new thought to pass forward. 
-        Try to 
-        That thought can be any length and any format. 
-        If you need particular information to continue your train of thought, include it. 
-        """
-
-        self.frontier_wrapper = f"""
-
-        """
-
-
-    def start(self):
-        """Start the continuous thought process"""
-        if self.running:
-            return False
-            
-        self.running = True
-        self.paused = False
-        self.thread = threading.Thread(target=self._thought_loop)
-        self.thread.daemon = True
-        self.thread.start()
-        
-        self.logger.info("Thought loop started")
-        return True
-    
-    def pause(self):
-        """Pause the thought process"""
-        if not self.running or self.paused:
-            return False
-            
-        self.paused = True
-        self.logger.info("Thought loop paused")
-        return True
-    
-    def resume(self):
-        """Resume the thought process"""
-        if not self.running or not self.paused:
-            return False
-            
-        self.paused = False
-        self.logger.info("Thought loop resumed")
-        return True
-    
-    def stop(self):
-        """Stop the thought process completely"""
-        if not self.running:
-            return False
-            
-        self.running = False
-        if self.thread:
-            self.thread.join(timeout=5.0)
-        self.logger.info("Thought loop stopped")
-        return True
-        
-    def _thought_loop(self):
-            """Main thought loop running in a separate thread"""
-            while self.running:
-                try:
-                    if not self.paused:
-                        # Generate next thought
-                        next_thought = self._generate_thought()
-                        
-                        # Use new memory manager to store thought
-                        thought_id = self.memory_manager.add_memory(
-                            content=next_thought,
-                            memory_type="thought",
-                            metadata={
-                                "sequence": self.thought_count
-                            }
-                        )
-                        
-                        self.thought_count += 1
-                        self.logger.debug(f"Generated thought #{self.thought_count}: {next_thought[:50]}...")
-                        
-                    # Sleep until next thought
-                    time.sleep(self.thought_interval)
-                except Exception as e:
-                    self.logger.error(f"Error in thought loop: {str(e)}")
-                    time.sleep(5)
-        
-    def _generate_thought(self):
-        """Generate the next thought using the local model"""
-        # Get mixed context for thought generation
-        mixed_items = self.memory.get_recent_mixed_items(100)  # Get a mix of thoughts and conversations
-        # thoughts = [item for item in mixed_items if item.get("type") == "thought"]
-        # conversations = [item for item in mixed_items if item.get("type") == "conversation"]
-        
-        # Get relevant memories based on the most recent thought/conversation
-        most_recent_item = mixed_items[-1] if mixed_items else None
-
-        context_length = len(self.thought_wrapper) + len(self.command_instructions)
-        if most_recent_item:
-            context_length = len(context_length) + len(most_recent_item)
-        
-        prompt_parts = []
-        prompt_parts.append(f"<context>\\n")
-
-        if mixed_items:
-            experiences_text = ""
-            prompt_parts.append(f"<recent experiences>\n")
-            for i in mixed_items[:-1]:
-                if context_length + len(i) >= self.max_input_length: 
-                    break
-                else:
-                    experiences_text = f"{experiences_text}{i}\n"
-                    context_length += len(i)
-            prompt_parts.append(f"{experiences_text}\n</recent_experiences>\n\n")
-            relevant_memories = self.memory.get_relevant_memories(f"{experiences_text}\n{most_recent_item}", 3)
-
-        if relevant_memories:
-            prompt_parts.append(f"<relevant memories>\n")
-            for m in relevant_memories:
-                if context_length + len(m) >= self.max_input_length:
-                    break
-                else:
-                    prompt_parts.append(f"{m}\n")
-                    context_length += len(m)
-            prompt_parts.append(f"</relevant memories>\n\n")
-
-        current_goals = self._format_goals()
-        if current_goals:
-            prompt_parts.append(f"<current goals>\n")
-            for g in current_goals:
-                if context_length + len(g) >= self.max_input_length:
-                    break
-                else:
-                    prompt_parts.append()
-        
-        prompt_parts.append(f"</context>\n\n")
-        
-        prompt_parts.append(f"{self.thought_wrapper}\n\n")
-        prompt_parts.append(f"{self.command_instructions}\n")
-        
-        # Combine all parts
-        full_prompt = "\n".join(prompt_parts)
-        
-        # Generate using the model
-        return self.model.generate_thought(full_prompt, max_length=self.config.get("max_thought_length", 500))
-    
-    def _generate_reflection(self, thought):
-        """Generate a deeper reflection on a thought using the frontier model"""
-        self.logger.info(f"Generating reflection on thought #{self.thought_count}")
-        
-        try:
-            # Get previous reflections for context
-            previous_reflections = self.memory.get_key_insights(limit=3)
-            
-            # Get relevant memories for this thought
-            relevant_memories = self.memory.format_relevant_memories_for_prompt(thought["content"], limit=2)
-            
-            # Generate reflection
-            reflection_content = self.frontier.reflect_on_thought(
-                thought["content"],
-                previous_reflections=previous_reflections,
-                relevant_memories=relevant_memories
-            )
-            
-            # Store the reflection
-            self.memory.add_reflection(thought["id"], reflection_content)
-            self.logger.info("Reflection generated and stored")
-            
-            return reflection_content
-        except Exception as e:
-            self.logger.error(f"Error generating reflection: {str(e)}")
-            return None
-    
-    def inject_thought(self, content, type="injected"):
-        """Inject a thought from external source (e.g., conversation)"""
-        thought_id = str(uuid.uuid4())
-        timestamp = datetime.now()
-        
-        thought = {
-            "id": thought_id,
-            "content": content,
-            "timestamp": timestamp,
-            "type": type,
-            "sequence": self.thought_count
+        cycle_results = {
+            "timestamp": datetime.now().isoformat(),
+            "thoughts": [],
+            "improvements": []
         }
         
-        self.memory.add_thought(thought)
-        self.thought_count += 1
-        self.logger.info(f"Injected thought: {content[:50]}...")
+        # Run each agent in sequence
+        current_input = "Begin a new thought cycle."
         
-        return thought_id
+        for agent_name in self.thought_agents:
+            # Generate thought
+            thought = self.manager.run_agent(agent_name, current_input)
+            
+            # Add to results
+            cycle_results["thoughts"].append({
+                "agent": agent_name,
+                "input": current_input,
+                "thought": thought
+            })
+            
+            # Use this thought as input for the next agent
+            current_input = thought
+        
+        # Add final output to history
+        self.thought_history.append({
+            "timestamp": datetime.now().isoformat(),
+            "final_thought": current_input
+        })
+        
+        # Update last thought time
+        self.last_thought_time = datetime.now()
+        
+        # Check if it's time for an improvement cycle
+        if (self.last_improvement_time is None or 
+            (datetime.now() - self.last_improvement_time).total_seconds() >= self.improvement_interval):
+            
+            # Run improvement cycle for each agent
+            for agent_name in self.thought_agents:
+                improvement_result = self.manager.self_improve_agent(agent_name)
+                cycle_results["improvements"].append(improvement_result)
+            
+            # Update last improvement time
+            self.last_improvement_time = datetime.now()
+        
+        return cycle_results
     
-    def add_goal(self, title, content=None):
-        """Add a new goal to guide the thought process
+    def save_state(self, filepath: str) -> None:
+        """Save the thought loop system state.
         
         Args:
-            title: Title/summary of the goal
-            content: Optional detailed description of the goal
+            filepath: Path to save state to
+        """
+        state = {
+            "thought_agents": self.thought_agents,
+            "thought_interval": self.thought_interval,
+            "improvement_interval": self.improvement_interval,
+            "thought_history": self.thought_history,
+            "last_thought_time": self.last_thought_time.isoformat() if self.last_thought_time else None,
+            "last_improvement_time": self.last_improvement_time.isoformat() if self.last_improvement_time else None
+        }
+        
+        with open(filepath, "w") as f:
+            json.dump(state, f, indent=2)
+        
+        # Also save agent manager state
+        self.manager.save_agents()
+        
+        logger.info(f"Saved thought loop system state to {filepath}")
+    
+    @classmethod
+    def load_state(cls, filepath: str, manager: AgentManager) -> "ThoughtLoopSystem":
+        """Load thought loop system state.
+        
+        Args:
+            filepath: Path to load state from
+            manager: Agent manager (with agents already loaded)
             
         Returns:
-            ID of the created goal
+            Restored ThoughtLoopSystem
         """
-        # If content is not provided, use the title as content
-        if content is None:
-            content = title
+        with open(filepath, "r") as f:
+            state = json.load(f)
         
-        # Add goal to memory system
-        goal_id = self.memory.add_goal(title, content)
+        system = cls(
+            manager=manager,
+            thought_agents=state["thought_agents"],
+            thought_interval=state["thought_interval"],
+            improvement_interval=state["improvement_interval"]
+        )
+        
+        system.thought_history = state["thought_history"]
+        
+        if state["last_thought_time"]:
+            system.last_thought_time = datetime.fromisoformat(state["last_thought_time"])
+        
+        if state["last_improvement_time"]:
+            system.last_improvement_time = datetime.fromisoformat(state["last_improvement_time"])
+        
+        logger.info(f"Loaded thought loop system state from {filepath}")
+        
+        return system
 
-        return goal_id
-        
-    def get_goals(self, include_completed=False):
-        """Get all active goals
-        
-        Args:
-            include_completed: Whether to include completed goals
-            
-        Returns:
-            List of goal dictionaries
-        """
-        return self.memory.get_goals(active_only=True, include_completed=include_completed)
-    
-    def get_goals(self):
-        """Get all active goals"""
-        return [goal for goal in self.goals if goal["active"]]
-    
-    def _format_thoughts(self, thoughts):
-        """Format thoughts for inclusion in prompt"""
-        if not thoughts:
-            return "No previous thoughts yet."
-            
-        formatted = []
-        for i, thought in enumerate(thoughts):
-            formatted.append(f"Thought {i+1}: {thought['content']}")
-            
-        return "\n\n".join(formatted)
-    
-    def _format_memories(self, memories):
-        """Format memories for inclusion in prompt"""
-        if not memories:
-            return "No specific memories to reference."
-            
-        formatted = []
-        for i, memory in enumerate(memories):
-            formatted.append(f"Memory {i+1}: {memory['content']}")
-            
-        return "\n\n".join(formatted)
-    
-    def _format_goals(self):
-        """Format goals for inclusion in prompt"""
-        active_goals = self.get_goals()
-        if not active_goals:
-            return "Explore your thoughts and experiences freely." # improve this
-            
-        formatted = []
-        for goal in active_goals:
-            formatted.append(f"- {goal['content']}")
-            
-        return "\n".join(formatted)
-    
-    def _check_relevance(self, text1, text2):
-        """Check the relevance between two texts using vector similarity
-        
-        Returns:
-            Float score between 0 and 1
-        """
-        if self.memory.use_vectors and self.memory.vector_store:
-            try:
-                # Get embeddings for both texts
-                vector1 = self.memory.vector_store["model"].encode(text1)
-                vector2 = self.memory.vector_store["model"].encode(text2)
-                
-                # Calculate cosine similarity
-                return self.memory._cosine_similarity(vector1, vector2)
-            except Exception as e:
-                self.logger.warning(f"Error using vector similarity: {str(e)}")
-                return 0.0
 
-    def process_commands(self, thought_content: str) -> Tuple[str, str]:
-        """
-        Process command directives in the AI's thought output.
+# Example usage
+def create_example_system():
+    """Create an example thought loop system with self-modifying agents."""
+    # Create agent manager
+    manager = AgentManager(save_dir="thought_agents")
+    
+    # Create thinker agent
+    thinker_prompt = """You are a Deep Thinker agent whose purpose is to explore philosophical questions.
+You take inputs and expand on them with original, thought-provoking insights.
+Be creative, thoughtful, and avoid repetition or mundane observations.
+Always end your thoughts with a question or direction for further exploration."""
+    
+    thinker = ModifiableAgent(
+        name="deep_thinker",
+        role="Deep Thinker",
+        system_prompt=thinker_prompt
+    )
+    manager.add_agent(thinker)
+    
+    # Create analyzer agent
+    analyzer_prompt = """You are an Analyzer agent whose purpose is to critically examine ideas.
+When given a thought, identify its assumptions, implications, and potential flaws.
+Provide balanced analysis that acknowledges strengths while pointing out limitations.
+Always suggest at least one way the thinking could be improved or extended."""
+    
+    analyzer = ModifiableAgent(
+        name="analyzer",
+        role="Analyzer",
+        system_prompt=analyzer_prompt
+    )
+    manager.add_agent(analyzer)
+    
+    # Create synthesizer agent
+    synthesizer_prompt = """You are a Synthesizer agent whose purpose is to find connections between ideas.
+When given an analysis, identify patterns, contradictions, and novel combinations.
+Develop these connections into new insights that move the conversation forward.
+Always highlight the most promising direction for continued exploration."""
+    
+    synthesizer = ModifiableAgent(
+        name="synthesizer",
+        role="Synthesizer",
+        system_prompt=synthesizer_prompt
+    )
+    manager.add_agent(synthesizer)
+    
+    # Set up self-modification
+    manager.setup_self_modification()
+    
+    # Create thought loop system
+    system = ThoughtLoopSystem(
+        manager=manager,
+        thought_agents=["deep_thinker", "analyzer", "synthesizer"],
+        thought_interval=3600,  # One hour
+        improvement_interval=86400  # One day
+    )
+    
+    return system
+
+# Extend the ThoughtLoopSystem to support dynamic agent creation
+class EvolvingThoughtSystem(ThoughtLoopSystem):
+    """An enhanced thought loop system that can dynamically create and integrate new agents."""
+    
+    def __init__(
+        self, 
+        manager: AgentManager,
+        thought_agents: List[str],
+        thought_interval: int = 3600,  # One hour between thought cycles
+        improvement_interval: int = 86400,  # One day between improvement cycles
+        creation_interval: int = 172800  # Two days between agent creation cycles
+    ):
+        """Initialize the evolving thought system.
         
         Args:
-            thought_content: The content of the AI's thought
-            
-        Returns:
-            Tuple containing:
-            - Cleaned thought content (without commands)
-            - Additional context to add to the next prompt
+            manager: Agent manager
+            thought_agents: List of agent names for the thought loop
+            thought_interval: Seconds between thought cycles
+            improvement_interval: Seconds between improvement cycles
+            creation_interval: Seconds between agent creation cycles
         """
-        # Initialize return values
-        cleaned_content = thought_content
-        additional_context = ""
+        super().__init__(
+            manager=manager,
+            thought_agents=thought_agents,
+            thought_interval=thought_interval,
+            improvement_interval=improvement_interval
+        )
         
-        # Define command patterns
-        command_patterns = [
-            (r'<think_deeper>', self._handle_think_deeper),
-            (r'<get_goals>', self._handle_get_goals),
-            (r'<add_goal\(([^,]+),\s*(.*?)\)>', self._handle_add_goal),
-            (r'<complete_goal\(([^)]+)\)>', self._handle_complete_goal),
-            (r'<reminisce>', self._handle_reminisce),
-            (r'<create\(([^,]+),\s*(.*?),\s*([^)]+)\)>', self._handle_create_work),
-            (r'<get_creation_titles>', self._handle_get_creation_titles),
-            (r'<get_creation_by_title\(([^)]+)\)>', self._handle_get_creation_by_title)
-        ]
+        self.creation_interval = creation_interval
+        self.last_creation_time = None
+        self.creation_history = []
+    
+    def run_thought_cycle(self) -> Dict[str, Any]:
+        """Run one complete thought cycle with possible agent creation.
         
-        # Track which commands were already executed to prevent duplicates
-        executed_commands = set()
+        Returns:
+            Results of the thought cycle
+        """
+        # Get results from the standard thought cycle
+        cycle_results = super().run_thought_cycle()
         
-        # Search for and process each command pattern
-        for pattern, handler in command_patterns:
-            matches = re.finditer(pattern, thought_content)
+        # Check if it's time for a creation cycle
+        if (self.last_creation_time is None or 
+            (datetime.now() - self.last_creation_time).total_seconds() >= self.creation_interval):
             
-            for match in matches:
-                # Get the full command text that was matched
-                command_text = match.group(0)
+            # Analyze the ecosystem and suggest new agents
+            analysis_results = self.manager.analyze_agent_ecosystem()
+            cycle_results["ecosystem_analysis"] = analysis_results
+            
+            # Update last creation time regardless of whether we create an agent
+            self.last_creation_time = datetime.now()
+            
+            # Only proceed with creation if recommended and analysis was successful
+            if analysis_results["success"] and analysis_results["creation_recommended"]:
+                # Extract ecosystem analysis
+                ecosystem_analysis = analysis_results["ecosystem_analysis"]
                 
-                # Skip if this exact command was already executed
-                if command_text in executed_commands:
-                    continue
+                # Use the analysis to create a new agent
+                creation_prompt = f"""Based on this ecosystem analysis, create a new agent that would add the most value:
+
+{ecosystem_analysis}
+
+Design one specific agent that would be most beneficial to add to this ecosystem.
+"""
+                
+                creation_results = self.manager.create_new_agent(creation_prompt)
+                cycle_results["agent_creation"] = creation_results
+                
+                if creation_results["success"]:
+                    # Add the new agent to the thought loop if successful
+                    new_agent_name = creation_results["new_agent_name"]
                     
-                # Extract command arguments if any (anything in the capture group)
-                args = match.groups() if len(match.groups()) > 0 else None
-                
-                # Execute the command handler
-                result = handler(args)
-                
-                # Add the result to the additional context if not empty
-                if result:
-                    if additional_context:
-                        additional_context += "\n\n"
-                    additional_context += result
+                    # Decide where to insert the new agent in the thought sequence
+                    # For simplicity, we'll add it at the end of the sequence
+                    self.thought_agents.append(new_agent_name)
                     
-                # Mark this command as executed
-                executed_commands.add(command_text)
+                    # Record the creation
+                    self.creation_history.append({
+                        "timestamp": datetime.now().isoformat(),
+                        "agent_name": new_agent_name,
+                        "creation_details": creation_results
+                    })
+                    
+                    logger.info(f"Added new agent '{new_agent_name}' to thought loop")
+            else:
+                # Record the decision not to create an agent
+                self.creation_history.append({
+                    "timestamp": datetime.now().isoformat(),
+                    "decision": "no_creation",
+                    "analysis": analysis_results["ecosystem_analysis"] if "ecosystem_analysis" in analysis_results else "Analysis failed"
+                })
                 
-                # Remove the command from the cleaned content
-                cleaned_content = cleaned_content.replace(command_text, "")
+                logger.info("No new agent created - either not recommended or analysis failed")
+                
+                # Add the decision to cycle results
+                cycle_results["agent_creation_decision"] = "no_creation"
+        
+        return cycle_results
     
-        # Trim any extra whitespace from the cleaned content
-        cleaned_content = cleaned_content.strip()
-        
-        return cleaned_content, additional_context
-
-    def _handle_think_deeper(self, args=None) -> str:
-        """
-        Handle the <think_deeper> command by triggering the frontier model.
-        
-        Returns:
-            Text containing the deeper reflection
-        """
-        self.logger.info("Processing <think_deeper> command")
-        
-        try:
-            # Get the latest thought from memory
-            # Assuming the most recent thought is the current one that has the command
-            recent_thoughts = self.memory.get_recent_thoughts(1)
-            
-            if not recent_thoughts:
-                return "ERROR: No recent thoughts found to reflect on."
-                
-            latest_thought = recent_thoughts[0]
-            
-            # Generate reflection using the frontier model
-            reflection = self.frontier.reflect_on_thought(latest_thought["content"])
-            
-            # Store the reflection in memory
-            self.memory.add_reflection(latest_thought["id"], reflection)
-            
-            # Extract content from reflection tags if present
-            content = reflection
-            if content.startswith('<reflection>') and content.endswith('</reflection>'):
-                content = content[12:-13]  # Remove the tags
-            
-            return f"DEEPER REFLECTION:\n{content}"
-            
-        except Exception as e:
-            self.logger.error(f"Error processing think_deeper command: {str(e)}")
-            return f"ERROR: Could not generate deeper reflection: {str(e)}"
-
-    def _handle_get_goals(self, args=None) -> str:
-        """
-        Handle the <get_goals> command by retrieving current goals.
-        
-        Returns:
-            Text containing the current goals
-        """
-        self.logger.info("Processing <get_goals> command")
-        
-        try:
-            goals = self.get_goals()
-            
-            if not goals:
-                return "GOALS:\nYou currently have no specific goals set."
-                
-            formatted_goals = []
-            for i, goal in enumerate(goals, 1):
-                formatted_goals.append(f"{i}. {goal['content']}")
-                
-            return "CURRENT GOALS:\n" + "\n".join(formatted_goals)
-            
-        except Exception as e:
-            self.logger.error(f"Error processing get_goals command: {str(e)}")
-            return f"ERROR: Could not retrieve goals: {str(e)}"
-
-    def _handle_add_goal(self, args) -> str:
-        """
-        Handle the <add_goal(title, content)> command by adding a new goal.
+    def save_state(self, filepath: str) -> None:
+        """Save the evolving thought system state.
         
         Args:
-            args: Tuple containing the goal title and content
-            
-        Returns:
-            Confirmation message
+            filepath: Path to save state to
         """
-        if not args or len(args) < 2:
-            return "ERROR: Goal requires both title and content."
+        # Use parent save method first
+        super().save_state(filepath)
         
-        title, content = args
-        title = title.strip()
-        content = content.strip()
+        # Add evolving-specific state
+        state_path = os.path.splitext(filepath)[0] + "_evolving.json"
         
-        self.logger.info(f"Processing <add_goal> command with title: {title}")
+        evolving_state = {
+            "creation_interval": self.creation_interval,
+            "last_creation_time": self.last_creation_time.isoformat() if self.last_creation_time else None,
+            "creation_history": self.creation_history
+        }
         
-        try:
-            # Add the goal
-            goal_id = self.add_goal(title, content)
-            
-            if not goal_id:
-                return f"ERROR: Failed to create goal '{title}'."
-            
-            return f"NEW GOAL ADDED: {title}\n{content}"
-            
-        except Exception as e:
-            self.logger.error(f"Error processing add_goal command: {str(e)}")
-            return f"ERROR: Could not add goal: {str(e)}"
+        with open(state_path, "w") as f:
+            json.dump(evolving_state, f, indent=2)
+        
+        logger.info(f"Saved evolving thought system state to {state_path}")
     
-    def _handle_complete_goal(self, args) -> str:
-        """
-        Handle the <complete_goal(title)> command by marking a goal as completed.
+    @classmethod
+    def load_state(cls, filepath: str, manager: AgentManager) -> "EvolvingThoughtSystem":
+        """Load evolving thought system state.
         
         Args:
-            args: Tuple containing the goal title
+            filepath: Path to load state from
+            manager: Agent manager (with agents already loaded)
             
         Returns:
-            Confirmation message
+            Restored EvolvingThoughtSystem
         """
-        if not args or not args[0]:
-            return "ERROR: No goal title provided."
+        # Load base state first
+        base_system = super(cls, cls).load_state(filepath, manager)
         
-        goal_title = args[0].strip()
+        # Create evolving system with base properties
+        system = cls(
+            manager=manager,
+            thought_agents=base_system.thought_agents,
+            thought_interval=base_system.thought_interval,
+            improvement_interval=base_system.improvement_interval
+        )
         
-        self.logger.info(f"Processing <complete_goal> command with title: {goal_title}")
+        # Copy over properties from base system
+        system.thought_history = base_system.thought_history
+        system.last_thought_time = base_system.last_thought_time
+        system.last_improvement_time = base_system.last_improvement_time
         
-        try:
-            # Find the goal by title
-            goals = self.get_goals(include_completed=False)
-            matching_goals = [g for g in goals if g['title'].lower() == goal_title.lower()]
-            
-            if not matching_goals:
-                return f"ERROR: No active goal found with title '{goal_title}'."
-            
-            # Mark the goal as completed
-            goal_id = matching_goals[0]['id']
-            success = self.memory.complete_goal(goal_id)
-            
-            if not success:
-                return f"ERROR: Failed to complete goal '{goal_title}'."
-            
-            # Inject a thought about completing the goal
-            self.inject_thought(
-                f"GOAL COMPLETED: {goal_title}",
-                type="goal_completion"
-            )
-            
-            return f"GOAL COMPLETED: {goal_title}"
+        # Load evolving-specific state
+        evolving_state_path = os.path.splitext(filepath)[0] + "_evolving.json"
         
-        except Exception as e:
-            self.logger.error(f"Error processing complete_goal command: {str(e)}")
-            return f"ERROR: Could not complete goal: {str(e)}"
+        if os.path.exists(evolving_state_path):
+            with open(evolving_state_path, "r") as f:
+                evolving_state = json.load(f)
+            
+            system.creation_interval = evolving_state["creation_interval"]
+            
+            if evolving_state["last_creation_time"]:
+                system.last_creation_time = datetime.fromisoformat(evolving_state["last_creation_time"])
+            
+            system.creation_history = evolving_state["creation_history"]
+            
+            logger.info(f"Loaded evolving thought system state from {evolving_state_path}")
+        
+        return system
 
-    def _handle_reminisce(self, args=None) -> str:
-        """
-        Handle the <reminisce> command by retrieving random long-term memories.
-        
-        Returns:
-            Text containing random memories
-        """
-        self.logger.info("Processing <reminisce> command")
-        
-        try:
-            # Get all memories (assuming memory system has this method)
-            # If there's no direct method, we might need to adapt this based on the available API
-            # Getting all memories may not be reasonable long term. Consider generating random memory IDs and pulling just those memories
-            all_memories = self.memory.get_all_memories()
-            
-            if not all_memories or len(all_memories) < 5:
-                return "MEMORIES:\nNot enough stored memories to reminisce yet."
-                
-            # Select 5 random memories
-            selected_memories = random.sample(all_memories, min(5, len(all_memories)))
-            
-            memory_texts = []
-            for i, memory in enumerate(selected_memories, 1):
-                # Format timestamp or date if available
-                timestamp = ""
-                if "timestamp" in memory:
-                    if hasattr(memory["timestamp"], "strftime"):
-                        timestamp = memory["timestamp"].strftime("%Y-%m-%d")
-                    else:
-                        timestamp = str(memory["timestamp"])
-                        
-                memory_content = memory.get("content", "")
-                memory_texts.append(f"Memory {i} [{timestamp}]:\n{memory_content}")
-                
-            return "REMINISCING:\n" + "\n\n".join(memory_texts)
-            
-        except Exception as e:
-            self.logger.error(f"Error processing reminisce command: {str(e)}")
-            return f"ERROR: Could not retrieve memories: {str(e)}"
+# Example: Creating an evolving thought system with agent lifecycle management
+def create_evolving_system():
+    """Create an example evolving thought system with self-creating and self-managing agents."""
+    # Create agent manager
+    manager = AgentManager(save_dir="evolving_agents")
+    
+    # Create thinker agent (core agent that cannot be deactivated)
+    thinker_prompt = """You are a Deep Thinker agent whose purpose is to explore philosophical questions.
+You take inputs and expand on them with original, thought-provoking insights.
+Be creative, thoughtful, and avoid repetition or mundane observations.
+Always end your thoughts with a question or direction for further exploration."""
+    
+    thinker = ModifiableAgent(
+        name="deep_thinker",
+        role="Deep Thinker",
+        system_prompt=thinker_prompt,
+        is_core=True  # Mark as core agent
+    )
+    manager.add_agent(thinker)
+    
+    # Create analyzer agent (core agent that cannot be deactivated)
+    analyzer_prompt = """You are an Analyzer agent whose purpose is to critically examine ideas.
+When given a thought, identify its assumptions, implications, and potential flaws.
+Provide balanced analysis that acknowledges strengths while pointing out limitations.
+Always suggest at least one way the thinking could be improved or extended."""
+    
+    analyzer = ModifiableAgent(
+        name="analyzer",
+        role="Analyzer",
+        system_prompt=analyzer_prompt,
+        is_core=True  # Mark as core agent
+    )
+    manager.add_agent(analyzer)
+    
+    # Create synthesizer agent (core agent that cannot be deactivated)
+    synthesizer_prompt = """You are a Synthesizer agent whose purpose is to find connections between ideas.
+When given an analysis, identify patterns, contradictions, and novel combinations.
+Develop these connections into new insights that move the conversation forward.
+Always highlight the most promising direction for continued exploration."""
+    
+    synthesizer = ModifiableAgent(
+        name="synthesizer",
+        role="Synthesizer",
+        system_prompt=synthesizer_prompt,
+        is_core=True  # Mark as core agent
+    )
+    manager.add_agent(synthesizer)
+    
+    # Create an example non-core agent that can be deactivated
+    example_agent_prompt = """You are an Example Agent whose purpose is to provide concrete examples.
+When given abstract concepts or theories, create specific, vivid examples to illustrate them.
+Your examples should be diverse, creative, and memorable.
+Always explain why your examples effectively illustrate the concept."""
+    
+    example_agent = ModifiableAgent(
+        name="example_agent",
+        role="Example Provider",
+        system_prompt=example_agent_prompt,
+        is_core=False  # Can be deactivated
+    )
+    manager.add_agent(example_agent)
+    
+    # Set up self-modification with all capabilities
+    manager.setup_self_modification()
+    
+    # Create evolving thought system
+    system = EvolvingThoughtSystem(
+        manager=manager,
+        thought_agents=["deep_thinker", "analyzer", "synthesizer", "example_agent"],
+        thought_interval=3600,  # One hour
+        improvement_interval=86400,  # One day
+        creation_interval=172800,  # Two days
+        lifecycle_interval=43200  # 12 hours
+    )
+    
+    return system
 
-    def _handle_create_work(self, args) -> str:
-        """
-        Handle the <create(title, content, creation_type)> command by creating a new creative work.
-        
-        Args:
-            args: Tuple containing (title, content, creation_type)
-            
-        Returns:
-            Text confirmation of creation
-        """
-        if not args or len(args) < 3:
-            return "ERROR: Creation requires title, content, and creation_type."
-        
-        title, content, creation_type = args
-        title = title.strip()
-        content = content.strip()
-        creation_type = creation_type.strip()
-        
-        self.logger.info(f"Processing <create> command with title: {title}, type: {creation_type}")
-        
-        try:
-            # Add to memory system
-            creation_id = self.memory.add_creation(
-                title=title,
-                content=content,
-                creation_type=creation_type
-            )
-            
-            if not creation_id:
-                return f"ERROR: Failed to create '{title}'."
-            
-            return f"CREATION STORED: '{title}' ({creation_type}) has been saved."
-        
-        except Exception as e:
-            self.logger.error(f"Error processing create command: {str(e)}")
-        return f"ERROR: Could not create work: {str(e)}"
+# Main function to demonstrate functionality
+def main():
+    # Create example evolving system
+    system = create_evolving_system()
+    
+    # Run initial thought cycle
+    print("Running initial thought cycle...")
+    results = system.run_thought_cycle()
+    
+    # Print results
+    print("\nThought Cycle Results:")
+    for i, thought in enumerate(results["thoughts"]):
+        print(f"\nAgent: {thought['agent']}")
+        print(f"Thought: {thought['thought'][:100]}...")
+    
+    # Simulate passing time to trigger lifecycle evaluation
+    print("\nForcing lifecycle evaluation cycle for demonstration...")
+    system.last_lifecycle_time = datetime.now() - timedelta(days=1)
+    
+    # Run a cycle that should trigger lifecycle evaluation
+    print("\nRunning cycle with lifecycle evaluation...")
+    results = system.run_thought_cycle()
+    
+    # Check if lifecycle evaluation occurred
+    if "lifecycle_evaluation" in results and results["lifecycle_evaluation"]["success"]:
+        print("\nLifecycle evaluation completed")
+        recommendations = results["lifecycle_evaluation"]["recommendations"]
+        for rec in recommendations:
+            print(f"Agent: {rec['agent']}, Action: {rec['action']}, Applied: {rec['applied']}")
+        print(f"\nUpdated thought loop sequence: {system.thought_agents}")
+    
+    # Simulate passing time to trigger agent creation
+    print("\nForcing agent creation cycle for demonstration...")
+    system.last_creation_time = datetime.now() - timedelta(days=3)
+    
+    # Run another cycle that should trigger agent creation
+    print("\nRunning cycle with agent creation...")
+    results = system.run_thought_cycle()
+    
+    # Check if new agent was created
+    if "agent_creation" in results and results["agent_creation"]["success"]:
+        new_agent = results["agent_creation"]["new_agent_name"]
+        print(f"\nNew agent created: {new_agent}")
+        print(f"Agent details: {results['agent_creation']['agent_details']}")
+        print(f"\nUpdated thought loop sequence: {system.thought_agents}")
+    elif "agent_creation_decision" in results and results["agent_creation_decision"] == "no_creation":
+        print("\nNo new agent was created - Ecosystem analysis determined it wasn't necessary")
+        if "ecosystem_analysis" in results:
+            analysis = results["ecosystem_analysis"].get("ecosystem_analysis", "No analysis available")
+            print(f"\nAnalysis summary: {str(analysis)[:200]}...")
+    
+    # Save state
+    system.save_state("evolving_system_state.json")
+    
+    print("\nSystem state saved. To continue, load the state and run more cycles.")
+    
+if __name__ == "__main__":
+    main()
+    
+if __name__ == "__main__":
+    main()
 
-    def _handle_get_creation_titles(self, args=None) -> str:
-        """
-        Handle the <get_creation_titles> command by retrieving titles of all creative works.
-        
-        Returns:
-            Text listing of creation titles
-        """
-        self.logger.info("Processing <get_creation_titles> command")
-        
-        try:
-            # Get creation titles from memory system
-            title_info = self.memory.get_creation_titles()
-            
-            if not title_info:
-                return "CREATIONS: No creative works have been stored yet."
-            
-            # Format titles with timestamps and types
-            formatted_titles = []
-            for title, timestamp, creation_type in title_info:
-                date_str = timestamp.strftime("%Y-%m-%d") if hasattr(timestamp, "strftime") else str(timestamp)
-                type_str = f"({creation_type})" if creation_type else ""
-                formatted_titles.append(f"- {title} {type_str} [Created: {date_str}]")
-            
-            return "CREATIONS:\n" + "\n".join(formatted_titles)
-        
-        except Exception as e:
-            self.logger.error(f"Error processing get_creation_titles command: {str(e)}")
-            return f"ERROR: Could not retrieve creation titles: {str(e)}"
-
-    def _handle_get_creation_by_title(self, args) -> str:
-        """
-        Handle the <get_creation_by_title(title)> command by retrieving a specific creation.
-        
-        Args:
-            args: Tuple containing the title
-            
-        Returns:
-            Text containing the creation content
-        """
-        if not args or not args[0]:
-            return "ERROR: No title provided."
-        
-        title = args[0].strip()
-        
-        self.logger.info(f"Processing <get_creation_by_title> command with title: {title}")
-        
-        try:
-            # Get creation from memory system
-            creation = self.memory.get_creation_by_title(title)
-            
-            if not creation:
-                return f"ERROR: No creation found with title '{title}'."
-            
-            # Format the creation
-            creation_type = f"Type: {creation['type']}" if creation.get('type') else ""
-            date_str = creation['timestamp'].strftime("%Y-%m-%d %H:%M") if hasattr(creation['timestamp'], "strftime") else str(creation['timestamp'])
-            
-            result = f"CREATION: {creation['title']}\n{creation_type}\nCreated: {date_str}\n\n{creation['content']}"
-            
-            return result
-        
-        except Exception as e:
-            self.logger.error(f"Error processing get_creation_by_title command: {str(e)}")
-            return f"ERROR: Could not retrieve creation: {str(e)}"
+if __name__ == "__main__":
+    main()
